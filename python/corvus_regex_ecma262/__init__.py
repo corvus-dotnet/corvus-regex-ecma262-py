@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from ._native import MAX_NESTING, MAX_PATTERN_LENGTH, Match, MatchIterator, MatchLimitError, Regex, error
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 __all__ = [
     "MAX_NESTING",
