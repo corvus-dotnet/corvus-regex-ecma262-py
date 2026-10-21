@@ -1,0 +1,90 @@
+name: pypi-publish
+# Publishes corvus-regex-ecma262 to PyPI when a GitHub release is published: the wheels for every platform and the
+# sdist, built and tested by wheels.yml. The release's tag must be v<version> for the version in pyproject.toml; a
+# version already on PyPI publishes nothing, so re-running a release's jobs is safe. To release: bump the version (in
+# pyproject.toml, Cargo.toml and __version__; ci.yml checks they agree), push, and publish a release tagged v<version>.
+#
+# It authenticates with PyPI trusted publishing (OIDC): no token is stored. The project's trusted publisher on PyPI
+# names this repository, this workflow file and the environment "pypi", so keep those names. A trusted publisher can
+# be added before the project exists (a "pending" publisher), so the first version is published by this workflow too.
+# There is no staged approval: the upload makes the version live, and a published version can be yanked but its files
+# never replaced.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pypi-publish
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Version to publish
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.check.outputs.publish }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Check the tag names this version and whether PyPI has it
+        id: check
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -n 1)
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::The release's tag is $TAG but pyproject.toml says $version (the tag must be v$version)."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          # PyPI answers 404 for a project or version it does not have.
+          status=$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/corvus-regex-ecma262/$version/json")
+          case "$status" in
+            200) echo "publish=false" >> "$GITHUB_OUTPUT"
+                 echo "::notice::corvus-regex-ecma262 $version is already on PyPI; nothing to publish." ;;
+            404) echo "publish=true" >> "$GITHUB_OUTPUT" ;;
+            *)   echo "::error::PyPI answered $status for corvus-regex-ecma262 $version."
+                 exit 1 ;;
+          esac
+
+  build:
+    name: Build
+    needs: version
+    if: needs.version.outputs.publish == 'true'
+    uses: ./.github/workflows/wheels.yml
+
+  publish:
+    name: Publish
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/corvus-regex-ecma262/${{ needs.version.outputs.version }}/
+    permissions:
+      id-token: write  # PyPI trusted publishing
+    steps:
+      - name: Download the wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+      - name: Download the sdist
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sdist
+          path: dist
+      - name: Check the artifacts
+        # Seven wheels (one per platform) and the sdist, all of this version.
+        run: |
+          ls -l dist
+          version="${{ needs.version.outputs.version }}"
+          [ "$(ls dist/corvus_regex_ecma262-$version-*.whl | wc -l)" -eq 7 ]
+          [ -f "dist/corvus_regex_ecma262-$version.tar.gz" ]
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2

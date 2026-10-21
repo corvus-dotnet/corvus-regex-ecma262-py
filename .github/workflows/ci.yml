@@ -1,0 +1,39 @@
+# Format, clippy (warnings denied) and the version checks, then the wheels for every platform, each tested, with the
+# ECMA-262 test data through the wheel on Linux and Windows (wheels.yml).
+name: ci
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Format, clippy and versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install the toolchain of rust-toolchain.toml
+        run: rustup show
+      - name: Format and clippy
+        run: |
+          cargo fmt --check
+          cargo clippy -j 4 --locked --all-targets -- -D warnings
+      - name: The versions agree
+        # pyproject.toml, Cargo.toml and __version__ name one version.
+        run: |
+          py=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -n 1)
+          rs=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          init=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' python/corvus_regex_ecma262/__init__.py)
+          echo "pyproject $py, Cargo $rs, __version__ $init"
+          [ "$py" = "$rs" ] && [ "$py" = "$init" ]
+
+  wheels:
+    name: Wheels
+    uses: ./.github/workflows/wheels.yml

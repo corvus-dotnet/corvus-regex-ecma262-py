@@ -1,0 +1,33 @@
+[build-system]
+requires = ["maturin>=1.15,<2"]
+build-backend = "maturin"
+
+[project]
+name = "corvus-regex-ecma262"
+version = "0.1.1"
+description = "ECMA-262 (JavaScript) regular expressions for Python: the grammar and the answers of RegExp, every flag, backed by the corvus-regex-ecma262 Rust crate."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "endjin" }]
+keywords = ["regex", "regexp", "ecmascript", "javascript", "ecma262", "rust"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Rust",
+    "Topic :: Text Processing",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/corvus-dotnet/corvus-regex-ecma262-py"
+Repository = "https://github.com/corvus-dotnet/corvus-regex-ecma262-py"
+Issues = "https://github.com/corvus-dotnet/corvus-regex-ecma262-py/issues"
+
+[tool.maturin]
+python-source = "python"
+module-name = "corvus_regex_ecma262._native"
+features = ["pyo3/extension-module"]
