@@ -7,10 +7,13 @@ judged by the data's own rule ("How a runner judges an engine" in its README) as
 Each record is asked about under each grammar V8 found it valid in: the record's flags with u added (the unicode
 answers), the record's flags alone (the legacy answers) and, in the file that has them, the flags with v added (the
 unicode_sets answers). A text is matched as a str (positions in code points) and as UTF-8 bytes (positions in bytes);
-a text with a lone surrogate has no UTF-8 form and is matched as a str alone. Records marked v8_deviation are left out.
-Any difference from V8 is a wrong answer; a refusal of a valid pattern, an acceptance of an invalid one, and a match
-that reaches its limit are counted apart and listed too. captures.jsonl is judged on exec, the global search, the
-sticky flag, replace and split, over the str and over the bytes. A match is given 2 seconds.
+a text with a lone surrogate has no UTF-8 form and is matched as a str alone. Records and tests marked v8_deviation
+are left out, but for those marked unicode-version, where V8 has the Unicode of 16 and test262 that of 17: the package
+has Unicode 17, so they are judged by test262's verdicts (test262_valid) and answers (test262_answer) in the grammars
+those name, and left out in the others. Any difference from V8 is a wrong answer; a refusal of a valid pattern, an
+acceptance of an invalid one, and a match that reaches its limit are counted apart and listed too. captures.jsonl is
+judged on exec, the global search, the sticky flag, replace and split, over the str and over the bytes. A match is
+given 2 seconds.
 
 The data gives positions in UTF-16 code units. Over a str they are compared as the package gives them, in code
 points, a position between the halves of a character (which a match without u or v can reach) as the character's
@@ -115,6 +118,17 @@ def compile_or_why(pattern: str, flags: str):
         return None, f"ERROR: {e}", True
 
 
+def by_test262(marked) -> bool:
+    """Whether a deviation is judged by test262's answers: one of the Unicode version, by this package, which has the
+    Unicode of test262."""
+    return marked.get("deviation") == "unicode-version"
+
+
+def skipped_record(r) -> bool:
+    """Whether a record is left out: one marked v8_deviation that is not judged by test262's answers."""
+    return r.get("v8_deviation") is True and not by_test262(r)
+
+
 def modes_of(r):
     valid = r.get("valid", {})
     out = [("u", "unicode", bool(valid.get("unicode"))), ("", "legacy", bool(valid.get("legacy")))]
@@ -126,7 +140,13 @@ def modes_of(r):
 def judge_tests(name, r, pattern, c, w):
     flags = r.get("flags", "")
     head_pattern = shown(pattern)
+    # A record marked for the Unicode version is judged in the grammars test262 gives a verdict for, by it.
+    record_by_test262 = r.get("v8_deviation") is True and by_test262(r)
     for suffix, answer, valid in modes_of(r):
+        if record_by_test262:
+            valid = r.get("test262_valid", {}).get(answer)
+            if not isinstance(valid, bool):
+                continue
         mode_flags = flags + suffix
         head = f"{name}\t/{head_pattern}/{mode_flags}"
         re, message, is_error = compile_or_why(pattern, mode_flags)
@@ -142,7 +162,12 @@ def judge_tests(name, r, pattern, c, w):
             w.append(f"ACCEPTED-INVALID\t{head}")
             continue
         for test in r.get("tests", []):
-            expected = test.get(answer)
+            # A test marked for the Unicode version, or any test of a record so marked, is judged by test262's answer
+            # in this grammar, and left out where it has none. A test marked otherwise is left out.
+            marked = test.get("v8_deviation") is True
+            if marked and not by_test262(test):
+                continue
+            expected = (test.get("test262_answer", {}) if marked or record_by_test262 else test).get(answer)
             text = test.get("text")
             if not isinstance(expected, bool) or text is None:
                 continue
@@ -304,7 +329,7 @@ def judge_lines(args):
         if not line.strip():
             continue
         r = json.loads(line)
-        if r.get("v8_deviation"):
+        if skipped_record(r):
             skipped += 1
             continue
         records += 1
