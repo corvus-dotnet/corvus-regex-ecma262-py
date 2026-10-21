@@ -13,9 +13,9 @@ dependencies = [
 
 [[package]]
 name = "corvus-regex-ecma262"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "771df2c0c5b00de0b3528be8d38fe3ea41eaf44476980460501214930171703e"
+checksum = "c5d3335ff127e58f585f886087379f04fde32a47ccfb2c8e6264c704270d60fb"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -23,7 +23,7 @@ dependencies = [
 
 [[package]]
 name = "corvus-regex-ecma262-py"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "corvus-regex-ecma262",
  "pyo3",

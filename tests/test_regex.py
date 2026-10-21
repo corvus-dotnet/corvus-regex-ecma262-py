@@ -185,3 +185,34 @@ def test_threads():
     for w in workers:
         w.join()
     assert counts == [40000] * 4
+
+
+def test_nested_classes_on_a_small_stack():
+    # With v a class holds classes, and each is a level of reading: the deepest nesting allowed is read, compiled and
+    # matched on a thread of 256 KB, and deeper is refused as too large, which a caller can catch, rather than
+    # overflowing the stack, which ends the process (as with the C library up to 0.1.1).
+    def nest(depth):
+        return "[" * depth + "a" + "]" * depth
+
+    results = []
+
+    def work():
+        try:
+            results.append(ecma.compile(nest(1000), "v").test("a"))
+            for pattern in (nest(1001), "[" * 200_000):
+                try:
+                    ecma.compile(pattern, "v")
+                    results.append("compiled")
+                except ecma.error as e:
+                    results.append(e.kind)
+        except BaseException as e:  # noqa: BLE001 - reported by the assertion below
+            results.append(e)
+
+    previous = threading.stack_size(256 * 1024)
+    try:
+        worker = threading.Thread(target=work)
+        worker.start()
+        worker.join()
+    finally:
+        threading.stack_size(previous)
+    assert results == [True, "too_large", "too_large"]
