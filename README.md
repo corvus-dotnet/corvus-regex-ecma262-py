@@ -16,9 +16,9 @@ wheels for Linux (glibc and musl), macOS and Windows, x64 and arm64, for every P
   the text, and `test` and `search` take a timeout, so neither a pattern nor a text from outside can make a program hang.
 
 **Compliance.** Over the [ECMA-262 test data](https://github.com/corvus-dotnet/ecma262-regex-test-data) (what V8 says
-about 109,547 patterns and 5,325,026 texts, `exec`, the global search, `replace` and `split` among them), through this
-package over `str` and over `bytes`, it gives 23,625,595 right answers and none wrong, refuses no valid pattern,
-accepts no invalid one and reaches no limit. CI runs the whole data on Linux and Windows on every change. (The data
+about 117,889 patterns and 5,884,566 texts, test262's and `exec`, the global search, `replace` and `split` among
+them), through this package over `str` and over `bytes`, it gives 26,929,347 right answers and none wrong, refuses
+no valid pattern, accepts no invalid one and reaches no limit. CI runs the whole data on Linux and Windows on every change. (The data
 asks 21,482 more questions, each a search that starts between the two halves of a character beyond the Basic
 Multilingual Plane, which a `str` position cannot name; the crate answers them all over UTF-16.)
 
