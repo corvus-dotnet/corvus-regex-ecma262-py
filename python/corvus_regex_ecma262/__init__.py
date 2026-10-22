@@ -14,13 +14,27 @@ A ``str`` is matched with positions in code points, as Python indexes it; ``byte
 bytes. Without the u or v flag a pattern is matched by UTF-16 code unit, as ECMA-262 matches it, so a match can take
 half of a character beyond the Basic Multilingual Plane: its text then holds that half as a lone surrogate, as a
 JavaScript string would, and its start and end are given as the whole character's.
+
+A pattern has a match timeout, as a ``Regex`` of .NET has: ``compile(pattern, flags, timeout=1.0)``, or for every
+pattern ``set_default_timeout(1.0)``. Every method that matches (``test``, ``search``, ``finditer``, ``replace``,
+``split``) gives each of its matches the timeout, and a match that reaches it raises ``MatchLimitError``.
 """
 
 from __future__ import annotations
 
-from ._native import MAX_NESTING, MAX_PATTERN_LENGTH, Match, MatchIterator, MatchLimitError, Regex, error
+from ._native import (
+    MAX_NESTING,
+    MAX_PATTERN_LENGTH,
+    Match,
+    MatchIterator,
+    MatchLimitError,
+    Regex,
+    default_timeout,
+    error,
+    set_default_timeout,
+)
 
-__version__ = "0.1.2"
+__version__ = "0.2.0"
 
 __all__ = [
     "MAX_NESTING",
@@ -30,15 +44,22 @@ __all__ = [
     "MatchLimitError",
     "Regex",
     "compile",
+    "default_timeout",
     "error",
     "is_valid",
+    "set_default_timeout",
 ]
 
 
-def compile(pattern: str, flags: str = "") -> Regex:
+def compile(pattern: str, flags: str = "", *, timeout: float | None = None) -> Regex:
     """Compiles a pattern with the flags ``new RegExp(pattern, flags)`` takes, any of dgimsuvy. Raises ``error`` when
-    the pattern or the flags are not valid, or the pattern is over a limit of size."""
-    return Regex(pattern, flags)
+    the pattern or the flags are not valid, or the pattern is over a limit of size.
+
+    ``timeout`` is the time in seconds each match may take before it is abandoned with ``MatchLimitError`` (0 for no
+    limit); None takes ``default_timeout()``, which is no limit unless ``set_default_timeout`` set one. A timeout also
+    caps the backtracking memory of a match. Without one a match has no limit of time or of memory, so give a pattern
+    or a text from outside one."""
+    return Regex(pattern, flags, timeout=timeout)
 
 
 def is_valid(pattern: str, flags: str = "") -> bool:
