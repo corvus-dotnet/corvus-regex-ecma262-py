@@ -197,6 +197,11 @@ fn limit_error(e: ecma::MatchError) -> PyErr {
     MatchLimitError::new_err(e.to_string())
 }
 
+/// A timeout in seconds as the crate takes it: None for none (as is 0).
+fn seconds_of(timeout: Option<Duration>) -> Option<f64> {
+    timeout.map(|t| t.as_secs_f64())
+}
+
 fn limit_of(timeout: Option<f64>) -> PyResult<Option<Duration>> {
     match timeout {
         None => Ok(None),
@@ -274,22 +279,22 @@ impl Regex {
         }
     }
 
-    /// The first match at or after `start` (engine position), with a limit or none.
+    /// The first match at or after `start` (engine position), with a limit of its own, or the pattern's timeout.
     fn captures_at(&self, view: View<'_>, start: usize, limit: Option<Duration>) -> PyResult<Option<Spans>> {
         match view {
             View::Utf8(s) => {
                 let caps = match limit {
-                    Some(l) => self.inner.try_captures_at(s, start, l).map_err(limit_error)?,
+                    Some(l) => self.inner.captures_at_within(s, start, l),
                     None => self.inner.captures_at(s, start),
                 };
-                Ok(caps.map(|c| self.spans_of_utf8(&c)))
+                Ok(caps.map_err(limit_error)?.map(|c| self.spans_of_utf8(&c)))
             }
             View::Utf16(u) => {
                 let caps = match limit {
-                    Some(l) => self.inner.try_captures_at_utf16(u, start, l).map_err(limit_error)?,
+                    Some(l) => self.inner.captures_at_within_utf16(u, start, l),
                     None => self.inner.captures_at_utf16(u, start),
                 };
-                Ok(caps.map(|c| self.spans_of_utf16(&c)))
+                Ok(caps.map_err(limit_error)?.map(|c| self.spans_of_utf16(&c)))
             }
         }
     }
@@ -301,8 +306,8 @@ impl Regex {
             return self.captures_at(view, start, None);
         }
         let found = match view {
-            View::Utf8(s) => self.inner.find_at(s, start).map(|m| (m.start(), m.end())),
-            View::Utf16(u) => self.inner.find_at_utf16(u, start).map(|m| (m.start(), m.end())),
+            View::Utf8(s) => self.inner.find_at(s, start).map_err(limit_error)?.map(|m| (m.start(), m.end())),
+            View::Utf16(u) => self.inner.find_at_utf16(u, start).map_err(limit_error)?.map(|m| (m.start(), m.end())),
         };
         Ok(found.map(|m| Spans { groups: vec![Some(m)], named: Vec::new() }))
     }
@@ -364,8 +369,8 @@ impl Spans {
 #[pymethods]
 impl Regex {
     #[new]
-    #[pyo3(signature = (pattern, flags = ""))]
-    fn new(py: Python<'_>, pattern: &Bound<'_, PyAny>, flags: &str) -> PyResult<Regex> {
+    #[pyo3(signature = (pattern, flags = "", *, timeout = None))]
+    fn new(py: Python<'_>, pattern: &Bound<'_, PyAny>, flags: &str, timeout: Option<f64>) -> PyResult<Regex> {
         let pattern: String = if let Ok(s) = pattern.cast::<PyString>() {
             match s.to_str() {
                 Ok(p) => p.to_owned(),
@@ -375,7 +380,15 @@ impl Regex {
         } else {
             return Err(PyTypeError::new_err("the pattern must be a str"));
         };
-        let inner = py.detach(|| ecma::Regex::new(&pattern, flags)).map_err(|e| compile_error(py, e))?;
+        let inner = match limit_of(timeout)? {
+            // None: the default timeout (see set_default_timeout).
+            None => py.detach(|| ecma::Regex::new(&pattern, flags)),
+            Some(t) => {
+                let flags = ecma::Flags::parse(flags).map_err(|e| compile_error(py, e))?;
+                py.detach(|| ecma::Regex::with_timeout(&pattern, flags, Some(t)))
+            }
+        }
+        .map_err(|e| compile_error(py, e))?;
         let f = inner.flags();
         let flag_text = format!("{f}");
         let names = inner.group_names().map(str::to_owned).collect();
@@ -406,6 +419,12 @@ impl Regex {
         format!("{}", self.inner.flags())
     }
 
+    /// The time in seconds each match may take before it is abandoned with MatchLimitError, or None for no limit.
+    #[getter]
+    fn timeout(&self) -> Option<f64> {
+        seconds_of(self.inner.match_timeout())
+    }
+
     /// The number of capturing groups.
     #[getter]
     fn groups(&self) -> usize {
@@ -419,7 +438,8 @@ impl Regex {
     }
 
     /// Whether the pattern matches at or after pos (at pos alone with the y flag), as RegExp.prototype.test with
-    /// lastIndex set to pos. With a timeout in seconds, a match that reaches it raises MatchLimitError.
+    /// lastIndex set to pos. A match that reaches the pattern's timeout raises MatchLimitError; a timeout in seconds
+    /// here takes the timeout's place for this match (0 for none).
     #[pyo3(signature = (string, pos = 0, *, timeout = None))]
     fn test(&self, py: Python<'_>, string: &Bound<'_, PyAny>, pos: usize, timeout: Option<f64>) -> PyResult<bool> {
         let limit = limit_of(timeout)?;
@@ -431,15 +451,17 @@ impl Regex {
         }
         let inner = &self.inner;
         py.detach(|| match (view, limit) {
-            (View::Utf8(s), None) => Ok(inner.is_match_at(s, start)),
-            (View::Utf16(u), None) => Ok(inner.is_match_at_utf16(u, start)),
-            (View::Utf8(s), Some(l)) => inner.try_find_at(s, start, l).map(|m| m.is_some()).map_err(limit_error),
-            (View::Utf16(u), Some(l)) => inner.try_find_at_utf16(u, start, l).map(|m| m.is_some()).map_err(limit_error),
+            (View::Utf8(s), None) => inner.is_match_at(s, start).map_err(limit_error),
+            (View::Utf16(u), None) => inner.is_match_at_utf16(u, start).map_err(limit_error),
+            (View::Utf8(s), Some(l)) => inner.find_at_within(s, start, l).map(|m| m.is_some()).map_err(limit_error),
+            (View::Utf16(u), Some(l)) => {
+                inner.find_at_within_utf16(u, start, l).map(|m| m.is_some()).map_err(limit_error)
+            }
         })
     }
 
-    /// The first match at or after pos, as exec finds it with lastIndex set to pos: a Match, or None. With a timeout
-    /// in seconds, a match that reaches it raises MatchLimitError.
+    /// The first match at or after pos, as exec finds it with lastIndex set to pos: a Match, or None. A match that
+    /// reaches the pattern's timeout raises MatchLimitError; a timeout in seconds here takes its place (0 for none).
     #[pyo3(signature = (string, pos = 0, *, timeout = None))]
     fn search(
         slf: &Bound<'_, Regex>,
@@ -464,6 +486,7 @@ impl Regex {
 
     /// Every match of a global search of the string, as matchAll makes one: an iterator of Match. After an empty match
     /// the search goes on one character later, and with the y flag each match must start where the one before ended.
+    /// A match that reaches the pattern's timeout raises MatchLimitError, and ends the search.
     fn finditer(slf: &Bound<'_, Regex>, string: &Bound<'_, PyAny>) -> PyResult<MatchIterator> {
         let hay = Arc::new(slf.get().hay(string)?);
         Ok(MatchIterator {
@@ -473,6 +496,7 @@ impl Regex {
             next: Some(0),
             positions: Arc::new(std::sync::Mutex::new(Positions::new())),
             buffer: std::collections::VecDeque::with_capacity(BATCH),
+            pending: None,
         })
     }
 
@@ -508,10 +532,12 @@ impl Regex {
         let inner = &self.inner;
         match view {
             View::Utf8(s) => {
-                let pieces = py.detach(|| match limit {
-                    Some(n) => inner.splitn(s, n),
-                    None => inner.split(s),
-                });
+                let pieces = py
+                    .detach(|| match limit {
+                        Some(n) => inner.splitn(s, n),
+                        None => inner.split(s),
+                    })
+                    .map_err(limit_error)?;
                 let bytes = matches!(hay, Hay::Bytes { .. });
                 Ok(pieces
                     .into_iter()
@@ -527,10 +553,12 @@ impl Regex {
                     .collect())
             }
             View::Utf16(u) => {
-                let pieces = py.detach(|| match limit {
-                    Some(n) => inner.splitn_utf16(u, n),
-                    None => inner.split_utf16(u),
-                });
+                let pieces = py
+                    .detach(|| match limit {
+                        Some(n) => inner.splitn_utf16(u, n),
+                        None => inner.split_utf16(u),
+                    })
+                    .map_err(limit_error)?;
                 pieces.into_iter().map(|p| p.map(|p| str_of_units(py, &p)).transpose()).collect()
             }
         }
@@ -569,13 +597,12 @@ impl Regex {
                             .to_str()?
                             .to_owned()
                     };
-                    let out = py.detach(|| {
-                        if all {
-                            inner.replace_all(s, &template).into_owned()
-                        } else {
-                            inner.replace(s, &template).into_owned()
-                        }
-                    });
+                    let out = py
+                        .detach(|| {
+                            if all { inner.replace_all(s, &template) } else { inner.replace(s, &template) }
+                                .map(|o| o.into_owned())
+                        })
+                        .map_err(limit_error)?;
                     return Ok(if bytes {
                         PyBytes::new(py, out.as_bytes()).into_any()
                     } else {
@@ -587,13 +614,12 @@ impl Regex {
                         units_of(replacement.cast::<PyString>().map_err(|_| {
                             PyTypeError::new_err("the replacement of a str must be a str or a function")
                         })?)?;
-                    let out = py.detach(|| {
-                        if all {
-                            inner.replace_all_utf16(u, &template).into_owned()
-                        } else {
-                            inner.replace_utf16(u, &template).into_owned()
-                        }
-                    });
+                    let out = py
+                        .detach(|| {
+                            if all { inner.replace_all_utf16(u, &template) } else { inner.replace_utf16(u, &template) }
+                                .map(|o| o.into_owned())
+                        })
+                        .map_err(limit_error)?;
                     return str_of_units(py, &out);
                 }
             }
@@ -646,6 +672,8 @@ struct MatchIterator {
     next: Option<usize>,
     positions: Arc<std::sync::Mutex<Positions>>,
     buffer: std::collections::VecDeque<Spans>,
+    /// The error of a match that reached the timeout, given once the matches before it have been.
+    pending: Option<PyErr>,
 }
 
 const BATCH: usize = 64;
@@ -662,11 +690,14 @@ impl MatchIterator {
         let regex = it.regex.bind(py);
         let view = it.hay.view();
         if it.buffer.is_empty() {
+            if let Some(e) = it.pending.take() {
+                return Err(e);
+            }
             let Some(mut at) = it.next else { return Ok(None) };
             let this = regex.get();
             let len = Regex::text_len(view);
             let buffer = &mut it.buffer;
-            it.next = py.detach(|| -> PyResult<Option<usize>> {
+            let next = py.detach(|| -> PyResult<Option<usize>> {
                 while buffer.len() < BATCH {
                     if at > len {
                         return Ok(None);
@@ -677,7 +708,20 @@ impl MatchIterator {
                     at = if e == s { this.advance(view, e) } else { e };
                 }
                 Ok(Some(at))
-            })?;
+            });
+            match next {
+                Ok(next) => it.next = next,
+                // A match that reached the timeout: the matches found before it come first, then the error, and the
+                // search ends.
+                Err(e) if it.buffer.is_empty() => {
+                    it.next = None;
+                    return Err(e);
+                }
+                Err(e) => {
+                    it.next = None;
+                    it.pending = Some(e);
+                }
+            }
         }
         let Some(spans) = it.buffer.pop_front() else { return Ok(None) };
         let string = it.string.bind(py);
@@ -870,8 +914,26 @@ impl Match {
     }
 }
 
+/// Sets the timeout of every Regex made from now on without one of its own: the time in seconds each match may take
+/// before it is abandoned with MatchLimitError, or None (or 0) for no limit, the default. A program that matches
+/// patterns or texts from outside should set one when it starts. A Regex already made keeps its own.
+#[pyfunction]
+#[pyo3(signature = (seconds))]
+fn set_default_timeout(seconds: Option<f64>) -> PyResult<()> {
+    ecma::set_default_match_timeout(limit_of(seconds)?);
+    Ok(())
+}
+
+/// The timeout in seconds a Regex made now without one takes, or None for no limit.
+#[pyfunction]
+fn default_timeout() -> Option<f64> {
+    seconds_of(ecma::default_match_timeout())
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(set_default_timeout, m)?)?;
+    m.add_function(wrap_pyfunction!(default_timeout, m)?)?;
     m.add_class::<Regex>()?;
     m.add_class::<Match>()?;
     m.add_class::<MatchIterator>()?;

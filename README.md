@@ -13,7 +13,8 @@ wheels for Linux (glibc and musl), macOS and Windows, x64 and arm64, for every P
 - `str` and `bytes` (UTF-8). A pattern answers as it does in a browser or Node, which Python's `re` does not: `\d`,
   `\w`, `\b`, `.` and `$`, case folding, `\p{...}` and the rest read as JavaScript reads them.
 - Every match runs without the GIL. A pattern without a backreference is matched in time proportional to its size times
-  the text, and `test` and `search` take a timeout, so neither a pattern nor a text from outside can make a program hang.
+  the text, and a pattern can be given a match timeout, as a `Regex` of .NET can, which every method honours and which
+  caps the backtracking memory too, so with a timeout neither a pattern nor a text from outside can make a program hang.
 
 **Compliance.** Over the [ECMA-262 test data](https://github.com/corvus-dotnet/ecma262-regex-test-data) (what V8 says
 about 117,889 patterns and 5,884,566 texts, test262's and `exec`, the global search, `replace` and `split` among
@@ -55,7 +56,8 @@ ecma.compile(r"\s*(;)\s*").split("a ; b;c")            # ['a', ';', 'b', ';', 'c
 
 | | |
 |---|---|
-| `compile(pattern, flags="")`, `Regex(pattern, flags="")` | Compiles a pattern as `new RegExp(pattern, flags)` does; raises `error` when it is not valid. |
+| `compile(pattern, flags="", *, timeout=None)`, `Regex(...)` | Compiles a pattern as `new RegExp(pattern, flags)` does; raises `error` when it is not valid. `timeout` is the match timeout in seconds (0 for none; None for `default_timeout()`). |
+| `set_default_timeout(seconds)`, `default_timeout()` | The timeout of every pattern compiled without one: None (no limit) unless set. |
 | `is_valid(pattern, flags="")` | Whether a pattern is valid, without compiling it. |
 | `Regex.test(string, pos=0, *, timeout=None)` | `RegExp.prototype.test` with `lastIndex` at `pos` (at `pos` alone with `y`). |
 | `Regex.search(string, pos=0, *, timeout=None)` | The first match at or after `pos`, as `exec` finds it: a `Match`, or `None`. |
@@ -63,7 +65,7 @@ ecma.compile(r"\s*(;)\s*").split("a ; b;c")            # ['a', ';', 'b', ';', 'c
 | `Regex.replace(string, replacement)` | `String.prototype.replace`: the first match, or every match with `g`; the replacement is a template or a function of the `Match`. |
 | `Regex.replace_all(string, replacement)` | `String.prototype.replaceAll`: every match. |
 | `Regex.split(string, limit=None)` | `String.prototype.split`: a list of strings, `None` for a group that did not take part. |
-| `Regex.pattern`, `.flags`, `.groups`, `.group_names` | What the pattern is. |
+| `Regex.pattern`, `.flags`, `.timeout`, `.groups`, `.group_names` | What the pattern is. |
 
 A `Match` is read as an `re.Match` is: `group(*groups)`, `m[g]`, `groups(default)`, `groupdict(default)`, `start(g)`,
 `end(g)`, `span(g)` (a group that did not take part is `None`, at -1), `string` and `re`; a group is a number or a name.
@@ -77,7 +79,12 @@ character's third byte. A `str` may hold lone surrogates; a lone surrogate writt
 
 **Errors.** `error` (a `ValueError`) says why a pattern did not compile in its message and in `kind`: `"pattern"`,
 `"flags"` or `"too_large"`. A match that reaches its timeout, or its cap on backtracking memory, raises
-`MatchLimitError`, a kind of `error`.
+`MatchLimitError`, a kind of `error`, from whichever method matched; a global search ends there.
+
+**Timeouts.** A pattern has a match timeout, as a `Regex` of .NET has: `compile(pattern, flags, timeout=1.0)`, or for
+every pattern compiled after it `set_default_timeout(1.0)`. Every method that matches gives each of its matches the
+timeout; `test` and `search` take a `timeout=` of their own in its place. Without a timeout (the default) a match has
+no limit of time or of memory, so a program that matches a pattern or a text it did not write should set one.
 
 **Threads.** A `Regex` is immutable and may be used from any number of threads; matching releases the GIL.
 

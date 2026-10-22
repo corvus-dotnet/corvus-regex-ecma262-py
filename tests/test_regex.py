@@ -163,6 +163,75 @@ def test_limits():
         slow.test(text, timeout=-1)
 
 
+def test_a_pattern_has_a_timeout_every_method_honours():
+    never = r"^(?:(a+)\1*)+$"
+    text = "a" * 60 + "b"
+    re = ecma.compile(never, "u", timeout=0.03)
+    assert re.timeout == pytest.approx(0.03)
+    for call in (
+        lambda: re.test(text),
+        lambda: re.search(text),
+        lambda: list(re.finditer(text)),
+        lambda: re.replace(text, "x"),
+        lambda: re.replace_all(text, "x"),
+        lambda: re.replace(text, lambda m: "x"),
+        lambda: re.split(text),
+        lambda: re.split(text, 2),
+        lambda: re.test(text.encode()),
+        lambda: list(re.finditer(text.encode())),
+        lambda: re.replace(text.encode(), b"x"),
+        lambda: re.split(text.encode()),
+        lambda: re.test(text + "\ud800"),
+    ):
+        with pytest.raises(ecma.MatchLimitError):
+            call()
+    # A text answered within the timeout is answered by every method.
+    assert re.test("aaaa")
+    assert re.replace("aaaa", "<$&>") == "<aaaa>"
+    assert len(re.split("aaaa")) == 3
+    # A timeout of its own takes the pattern's place for one match (0 for none).
+    assert ecma.compile(r"^(a+)\1$", timeout=0.000001).test("aaaa", timeout=0)
+    long = ecma.compile(never, "u", timeout=3600)
+    with pytest.raises(ecma.MatchLimitError):
+        long.test(text, timeout=0.03)
+    # The matches before the one that reached the timeout come first, then the error ends the search.
+    mixed = ecma.compile(r"(?:(a+)\1*)+$|b", "g", timeout=0.03)
+    found = []
+    with pytest.raises(ecma.MatchLimitError):
+        for m in mixed.finditer("b" + text):
+            found.append(m.group())
+    assert found == ["b"]
+
+
+def test_a_timeout_caps_the_memory_of_a_match():
+    re = ecma.compile(r"(?:a?){2147483647}", timeout=3600)
+    with pytest.raises(ecma.MatchLimitError, match="memory"):
+        re.test("")
+
+
+def test_the_default_timeout():
+    assert ecma.default_timeout() is None
+    assert ecma.compile("a").timeout is None
+    try:
+        ecma.set_default_timeout(0.03)
+        assert ecma.default_timeout() == pytest.approx(0.03)
+        re = ecma.compile(r"^(?:(a+)\1*)+$", "u")
+        own = ecma.compile("a", timeout=5)
+        none = ecma.compile("a", timeout=0)
+    finally:
+        ecma.set_default_timeout(None)
+    assert ecma.default_timeout() is None
+    assert re.timeout == pytest.approx(0.03)
+    with pytest.raises(ecma.MatchLimitError):
+        re.test("a" * 60 + "b")
+    assert own.timeout == 5
+    assert none.timeout is None
+    with pytest.raises(ValueError):
+        ecma.set_default_timeout(-1)
+    with pytest.raises(ValueError):
+        ecma.compile("a", timeout=-1)
+
+
 def test_types():
     r = ecma.compile("a")
     with pytest.raises(TypeError):
