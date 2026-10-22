@@ -238,7 +238,11 @@ def main() -> int:
             n = line.get("count")
             entry = {"median": round(m, 1), "min": lo, "max": hi, "count": n, "rounds": len(each),
                      "spread": round(spread, 4), "each": each}
-            oracle = figures.get("v8", {}).get(k, {}).get("line", {}).get("count")
+            # Without V8 in the run (V8=0), its count as the workloads carry it (v8Count, from the central run).
+            if "v8" in figures:
+                oracle = figures["v8"].get(k, {}).get("line", {}).get("count")
+            else:
+                oracle = workloads[k].get("v8Count")
             if oracle is not None and n != oracle and e != "v8":
                 differ.append(f"{e} {wid} {n} vs V8 {oracle}")
                 print(f"COUNT  {e:<13} {wid:<62} {n} against V8's {oracle}", file=sys.stderr)

@@ -29,7 +29,8 @@ args = ap.parse_args()
 
 run = json.load(open(args.run, encoding="utf-8"))
 facts = run["facts"]
-v8 = {"engine": facts.get("v8", "V8"), "results": run["results"].get("v8", {})}
+# A run without V8 (V8=0, whose counts were checked against the workloads' v8Count) has no V8 row.
+v8 = {"engine": facts.get("v8", "V8"), "results": run["results"]["v8"]} if "v8" in run["results"] else None
 workloads = json.load(open(args.workloads, encoding="utf-8"))
 ids = [w["id"] for w in workloads]
 
@@ -65,12 +66,13 @@ for key, name, _, _, _ in ENGINES:
         if r is None:
             continue
         results[name][w] = None if "error" in r else {"time": {"median": r["median"], "min": r["min"], "max": r["max"]}}
-v8_name = "V8"
-ENGINES.append(("v8", v8_name, "V8", v8["engine"], compliance("v8")))
-results[v8_name] = {}
-for w in ids:
-    r = v8["results"].get(w)
-    results[v8_name][w] = {"time": {"median": r["median"], "min": r["min"], "max": r["max"]}} if r and "error" not in r else None
+if v8:
+    v8_name = "V8"
+    ENGINES.append(("v8", v8_name, "V8", v8["engine"], compliance("v8")))
+    results[v8_name] = {}
+    for w in ids:
+        r = v8["results"].get(w)
+        results[v8_name][w] = {"time": {"median": r["median"], "min": r["min"], "max": r["max"]}} if r and "error" not in r else None
 # Where re or regex counts otherwise than V8 (the oracle), the row says so; an ECMA-262 engine that does is an error
 # above.
 differs = {}
@@ -90,7 +92,7 @@ job = (f"interleaved: every workload in turn, each in {facts.get('rounds')} roun
 over = facts.get("spread_over", "")
 spread = (f"over {float(facts.get('spread_limit', 0)) * 100:.0f}% (slowest - fastest) / median: {over}" if over
           else f"every figure within {float(facts.get('spread_limit', 0)) * 100:.0f}% (slowest - fastest) / median")
-runtime = "; ".join(x for x in (facts.get("python", ""), v8["engine"]) if x)
+runtime = "; ".join(x for x in (facts.get("python", ""), v8["engine"] if v8 else "") if x)
 data = {
     "meta": {
         "title": "corvus-regex-ecma262 from Python: the Industry benchmarks",
