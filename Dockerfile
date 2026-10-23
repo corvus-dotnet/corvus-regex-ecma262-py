@@ -9,16 +9,16 @@
 # at depth 1 inside the container unless its data/ directory is mounted at /data. JOB=short, SECONDS_EACH, PASSES,
 # CORES, SETTLE and RUN_URL pass through (see tools/bench/run.sh). The central benchmark site runs this image each
 # night; .github/workflows/harness-image.yml builds, smoke-runs and publishes it.
-FROM node:24.22.0-bookworm-slim AS node
+FROM node:24.22.0-bookworm-slim@sha256:91acba91b842bec0bf7ea6f5e09c644c7ccad72c4996ed9616d861d1c7cd60d4 AS node
 
-FROM rust:1.98-bookworm AS wheel
+FROM rust:1.98-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS wheel
 RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv && rm -rf /var/lib/apt/lists/* \
     && python3 -m venv /maturin && /maturin/bin/pip install -q "maturin==1.15.0"
 WORKDIR /src
 COPY . .
 RUN rustup show && /maturin/bin/maturin build --release -j 4 --locked --compatibility linux --out /wheels
 
-FROM python:3.13-slim-bookworm
+FROM python:3.13-slim-bookworm@sha256:e32be0e55814a08977501ca863271d9bd02443710db8f2afaf8372e2c4508530
 RUN apt-get update && apt-get install -y --no-install-recommends git util-linux ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
