@@ -141,18 +141,14 @@ STOPPED = {"error": "did not produce a result within 30 s", "limit": 30}
 def figure(exe: list[str], v8: str | None, path: str, index: int, spec: str, seconds: str, passes: str) -> dict:
     """One figure in a child process: the child's line of JSON, or one with the error."""
     engine, _, program = spec.partition("@")
-    env = None
     if engine == "v8":
         cmd = ["node", v8, "--one", path, str(index), seconds, passes]
-        # V8 reads the texts as they were downloaded, not this harness's copies, so that its count, which the count
-        # gate holds every engine here to, does not depend on how this harness reads a text.
-        env = {k: v for k, v in os.environ.items() if k != "CORVUS_REGEX_PLAIN"}
     elif program:
         cmd = [program, "--one", path, str(index), engine, seconds, passes]
     else:
         cmd = exe + ["--one", path, str(index), engine, seconds, passes]
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env).stdout
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30).stdout
     except subprocess.TimeoutExpired:
         return dict(STOPPED)
     line = out.strip().splitlines()
