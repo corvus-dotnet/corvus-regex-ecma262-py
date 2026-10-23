@@ -25,6 +25,15 @@ if [ -z "$data" ]; then
   git clone --quiet --depth 1 https://github.com/corvus-dotnet/ecma262-regex-test-data "$work/test-data"
   data="$work/test-data/data"
 fi
+# COUNT_GATE=1 (the harness-image job): every workload counted by this library's engines beside V8, one round of the
+# least timing, each count checked against V8's by count-gate.py; nothing else runs.
+if [ "${COUNT_GATE:-0}" = 1 ]; then
+  export CORVUS_REGEX_TEXTS="$texts"
+  python3 tools/bench/industry.py "$workloads" --engines corvus-str,corvus-bytes,v8 --v8 tools/benchmarks/v8/industry.mjs --rounds 1 --seconds 0.01 \
+    --passes 1 --out "$work/counts.json" 2> "$work/counts.log" || true
+  python3 tools/bench/count-gate.py "$workloads" "$work/counts.json" corvus-str corvus-bytes
+  exit $?
+fi
 python3 tools/dataset.py "$data" "$work/wrong-corvus.tsv" > "$work/compliance-corvus.txt" 2>&1 || true
 # V8=0 (the central run, for every image but one): no V8, whose counts the workloads carry (v8Count).
 v8=(--v8 tools/benchmarks/v8/industry.mjs)
