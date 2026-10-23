@@ -13,7 +13,7 @@ name = "_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-corvus-regex-ecma262 = "0.2.0"
+corvus-regex-ecma262 = "0.2.1"
 pyo3 = { version = "0.29.3", features = ["abi3-py310"] }
 simdutf8 = "0.1.5"
 
