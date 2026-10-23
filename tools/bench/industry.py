@@ -57,9 +57,11 @@ def load_text(file: str) -> str:
     if plain:
         path = os.path.join(plain, file.removesuffix(".gz"))
         if os.path.exists(path):
-            with open(path, encoding="utf-8") as f:
+            with open(path, encoding="utf-8", newline="") as f:
                 return f.read()
-    with gzip.open(os.path.join(text_dir(), file), "rt", encoding="utf-8") as f:
+    # newline="": the text exactly as it is. Python's text mode would turn its CRLF line ends into LF, so that every
+    # engine here matched another text than V8's (sherlock's .* counted 23,439 where V8 counts 36,491).
+    with gzip.open(os.path.join(text_dir(), file), "rt", encoding="utf-8", newline="") as f:
         s = f.read()
     return s.removeprefix("﻿")
 
@@ -200,7 +202,7 @@ def main() -> int:
     for w in workloads:
         path = os.path.join(plain, w["file"].removesuffix(".gz"))
         if not os.path.exists(path):
-            with open(path, "w", encoding="utf-8") as f:
+            with open(path, "w", encoding="utf-8", newline="") as f:
                 f.write(load_text(w["file"]))
     os.environ["CORVUS_REGEX_PLAIN"] = plain
     exe = [sys.executable, os.path.abspath(__file__)]
