@@ -3,6 +3,8 @@ name: pypi-publish
 # sdist, built and tested by wheels.yml. The release's tag must be v<version> for the version in pyproject.toml; a
 # version already on PyPI publishes nothing, so re-running a release's jobs is safe. To release: bump the version (in
 # pyproject.toml, Cargo.toml and __version__; ci.yml checks they agree), push, and publish a release tagged v<version>.
+# A harness release (gh release create harness-<version>.<n> --latest=false), for a change to the benchmark harness
+# alone, publishes the harness image and nothing here.
 #
 # It authenticates with PyPI trusted publishing (OIDC): no token is stored. The project's trusted publisher on PyPI
 # names this repository, this workflow file and the environment "pypi", so keep those names. A trusted publisher can
@@ -22,6 +24,8 @@ concurrency:
 
 jobs:
   version:
+    # A harness release (a tag starting harness-) publishes the harness image alone.
+    if: ${{ !startsWith(github.event.release.tag_name, 'harness-') }}
     name: Version to publish
     runs-on: ubuntu-latest
     outputs:
