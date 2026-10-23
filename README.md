@@ -102,7 +102,7 @@ no limit of time or of memory, so a program that matches a pattern or a text it 
 
 The Industry workloads of dotnet/performance, this package against Python's `re`, the `regex` package and V8, are on
 the central page, [corvus-oss.org/corvus-regex-ecma262-benchmarks](https://corvus-oss.org/corvus-regex-ecma262-benchmarks/),
-measured nightly on one runner with every other Corvus ECMA-262 engine.
+measured nightly on one runner with the engines of every other source.
 
 ## Repository
 
