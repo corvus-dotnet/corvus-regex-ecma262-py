@@ -238,7 +238,8 @@ def judge_all(matches, all_, starts, ends):
     n = 0
     for m in matches:
         if n >= len(all_):
-            break
+            # One match more than the data has: wrong, unless the data kept only the first twenty.
+            return len(all_) == 20
         e = all_[n]
         if e is None:
             return False
@@ -283,6 +284,7 @@ def judge_mode(where, a, text, re, g, y, c, w):
     n = 0
     for m in g.finditer(text):
         if n >= len(all_):
+            ok = ok and len(all_) == 20
             break
         if not same_slots(all_[n], m, starts, ends):
             ok = False
