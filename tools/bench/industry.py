@@ -11,9 +11,9 @@ The workloads are the outer loop, each workload's rounds next and the engines in
 round, so that a workload's rounds are seconds apart, as its engines are. Each figure is a child process of its own
 (`industry.py --one`, or `node industry.mjs --one` for V8), which warms for two fifths of its seconds, then times
 `passes` passes of as many counts as fit the rest and reports their median. A workload's figure for an engine is the
-median of its rounds, with the fastest and the slowest round as its spread; a figure whose spread, (slowest - fastest)
-/ median, is over --spread is listed in the run's facts (spread_over) and on stderr. A child that does not finish in two
-minutes is stopped and recorded as such.
+median of its rounds, with the fastest and the slowest round as its spread; a figure whose spread, (slowest - fastest) /
+median, is over --spread is listed in the run's facts (spread_over) and on stderr. A figure that does not finish in 30 s
+is stopped and recorded as giving no result within 30 s, and is not run in the workload's later rounds.
 
 The engines, each counting every match of a global search as a Python program that wants every match would, with
 finditer:
@@ -132,6 +132,10 @@ def one(path: str, index: int, engine: str, seconds: float, passes: int) -> dict
     return {"median": round(median, 1), "min": round(low, 1), "max": round(high, 1), "count": expected, "reps": reps}
 
 
+# A figure stopped at the limit, which the page shows as giving no result within 30 s.
+STOPPED = {"error": "did not produce a result within 30 s", "limit": 30}
+
+
 def figure(exe: list[str], v8: str | None, path: str, index: int, spec: str, seconds: str, passes: str) -> dict:
     """One figure in a child process: the child's line of JSON, or one with the error."""
     engine, _, program = spec.partition("@")
@@ -142,9 +146,9 @@ def figure(exe: list[str], v8: str | None, path: str, index: int, spec: str, sec
     else:
         cmd = exe + ["--one", path, str(index), engine, seconds, passes]
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=120).stdout
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30).stdout
     except subprocess.TimeoutExpired:
-        return {"error": "did not finish in two minutes"}
+        return dict(STOPPED)
     line = out.strip().splitlines()
     if not line:
         return {"error": "the process ended without figures"}
@@ -207,6 +211,9 @@ def main() -> int:
         for rnd in range(args.rounds):
             for turn in range(len(engines)):
                 e = engines[(turn + rnd) % len(engines)]
+                # A figure stopped at the limit in an earlier round is not run again.
+                if figures[e].get(k, {}).get("line") == STOPPED:
+                    continue
                 line = figure(exe, args.v8, args.workloads, k, e, args.seconds, args.passes)
                 fig = figures[e].setdefault(k, {"each": [], "line": line})
                 fig["line"] = line
