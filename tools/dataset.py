@@ -19,6 +19,9 @@ points, a position between the halves of a character (which a match without u or
 start for a start and its end for an end; over bytes they are compared in bytes, such a position as the character's
 third byte, as the crate gives it. Texts are compared exactly over a str (a half character is a lone surrogate, as in
 V8's answer), and over bytes with V8's answer converted to UTF-8, a lone surrogate as U+FFFD.
+
+ill-formed-utf8.jsonl holds bytes that are not UTF-8, each one answer over UTF-8 under each grammar the pattern is valid
+in, whose right answer is a refusal: the package's ValueError for bytes that are not UTF-8.
 """
 from __future__ import annotations
 
@@ -169,6 +172,46 @@ def judge_tests(name, r, pattern, c, w):
                 else:
                     c.wrong += 1
                     w.append(f"WRONG\t{head}\t{escape(text)}\t{enc}\texpected {'true' if expected else 'false'}")
+
+
+def judge_ill_formed(r, pattern, c, w):
+    name = "ill-formed-utf8.jsonl"
+    flags = r.get("flags", "")
+    head_pattern = shown(pattern)
+    for suffix, _, valid in modes_of(r):
+        mode_flags = flags + suffix
+        head = f"{name}\t/{head_pattern}/{mode_flags}"
+        re, message, is_error = compile_or_why(pattern, mode_flags)
+        if re is None:
+            if is_error:
+                c.errors += 1
+            if valid:
+                c.refused += 1
+                w.append(f"REFUSED\t{head}\t{message.splitlines()[0] if message else ''}")
+            continue
+        if not valid:
+            c.accepted += 1
+            w.append(f"ACCEPTED-INVALID\t{head}")
+            continue
+        for test in r.get("tests", []):
+            subject = bytes.fromhex(test["bytes"])
+            try:
+                got = re.test(subject, timeout=LIMIT)
+            except ecma.MatchLimitError as e:
+                c.limited += 1
+                w.append(f"LIMIT\t{head}\t{test['bytes']}\tutf8\t{'memory' if 'memory' in str(e) else 'time'}")
+                continue
+            except ValueError as e:
+                # The package's refusal of bytes that are not UTF-8 (a MatchLimitError is a ValueError too, and is
+                # caught above).
+                if "utf-8" in str(e).lower():
+                    c.right += 1
+                else:
+                    c.errors += 1
+                    w.append(f"ERROR\t{head}\t{test['bytes']}\tutf8\t{type(e).__name__}: {e}")
+                continue
+            c.wrong += 1
+            w.append(f"WRONG\t{head}\t{test['bytes']}\tutf8\tread as UTF-8 ({got}), not refused")
 
 
 def same_slots(expected, m, starts, ends):
@@ -324,6 +367,8 @@ def judge_lines(args):
             continue
         if name == "captures.jsonl":
             judge_captures(r, pattern, c, w)
+        elif name == "ill-formed-utf8.jsonl":
+            judge_ill_formed(r, pattern, c, w)
         else:
             judge_tests(name, r, pattern, c, w)
     return c, w, records, skipped

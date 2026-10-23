@@ -18,11 +18,12 @@ wheels for Linux (glibc and musl), macOS and Windows, x64 and arm64, for every P
   caps the backtracking memory too, so with a timeout neither a pattern nor a text from outside can make a program hang.
 
 **Compliance.** Over the [ECMA-262 test data](https://github.com/corvus-dotnet/ecma262-regex-test-data) (what V8 says
-about 117,889 patterns and 5,884,566 texts, test262's and `exec`, the global search, `replace` and `split` among
-them), through this package over `str`, `bytes` and code units, it gives 26,950,829 right answers, every answer the
-data asks, and none wrong, refuses no valid pattern, accepts no invalid one and reaches no limit. CI runs the whole data
-on Linux and Windows on every change. (A search that starts between the two halves of a character beyond the Basic
-Multilingual Plane, which a `str` position cannot name, is asked over code units.)
+about 117,889 patterns and 5,884,566 texts, test262's and `exec`, the global search, `replace` and `split` among them,
+and texts of bytes that are not UTF-8, which it refuses), through this package over `str`, `bytes` and code units, it
+gives 26,953,709 right answers, every answer the data asks, and none wrong, refuses no valid pattern, accepts no invalid
+one and reaches no limit. CI runs the whole data on Linux and Windows on every change. (A search that starts between the
+two halves of a character beyond the Basic Multilingual Plane, which a `str` position cannot name, is asked over code
+units.)
 
 ## Install
 
@@ -87,7 +88,8 @@ on a little-endian machine.
 
 **Errors.** `error` (a `ValueError`) says why a pattern did not compile in its message and in `kind`: `"pattern"`,
 `"flags"` or `"too_large"`. A match that reaches its timeout, or its cap on backtracking memory, raises
-`MatchLimitError`, a kind of `error`, from whichever method matched; a global search ends there.
+`MatchLimitError`, a kind of `error`, from whichever method matched; a global search ends there. `bytes` that are not
+UTF-8 raise a plain `ValueError`, before any of them is read: none is matched, nor read as U+FFFD.
 
 **Timeouts.** A pattern has a match timeout, as a `Regex` of .NET has: `compile(pattern, flags, timeout=1.0)`, or for
 every pattern compiled after it `set_default_timeout(1.0)`. Every method that matches gives each of its matches the

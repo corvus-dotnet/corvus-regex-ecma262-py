@@ -318,3 +318,16 @@ def test_nested_classes_on_a_small_stack():
     finally:
         threading.stack_size(previous)
     assert results == [True, "too_large", "too_large"]
+
+
+def test_bytes_that_are_not_utf8_are_refused():
+    # Each method refuses them before it reads any, even where a match would end before them.
+    re = ecma.compile("a")
+    for text in (b"a\xff", b"\xc0\x80", b"a\xed\xa0\x80", b"\xf0\x9f\x98", "a".encode() * 300 + b"\x80"):
+        calls = (re.test, re.search, re.finditer, re.split, lambda t: re.replace(t, b"b"),
+                 lambda t: re.replace_all(t, b"b"))
+        for call in calls:
+            with pytest.raises(ValueError) as e:
+                call(text)
+            assert not isinstance(e.value, ecma.error)
+            assert "utf-8" in str(e.value).lower()
