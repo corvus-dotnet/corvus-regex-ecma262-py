@@ -57,9 +57,11 @@ def load_text(file: str) -> str:
     if plain:
         path = os.path.join(plain, file.removesuffix(".gz"))
         if os.path.exists(path):
-            with open(path, encoding="utf-8") as f:
+            with open(path, encoding="utf-8", newline="") as f:
                 return f.read()
-    with gzip.open(os.path.join(text_dir(), file), "rt", encoding="utf-8") as f:
+    # newline="": the text exactly as it is. Python's text mode would turn its CRLF line ends into LF, so that every
+    # engine here matched another text than V8's (sherlock's .* counted 23,439 where V8 counts 36,491).
+    with gzip.open(os.path.join(text_dir(), file), "rt", encoding="utf-8", newline="") as f:
         s = f.read()
     return s.removeprefix("﻿")
 
@@ -139,14 +141,18 @@ STOPPED = {"error": "did not produce a result within 30 s", "limit": 30}
 def figure(exe: list[str], v8: str | None, path: str, index: int, spec: str, seconds: str, passes: str) -> dict:
     """One figure in a child process: the child's line of JSON, or one with the error."""
     engine, _, program = spec.partition("@")
+    env = None
     if engine == "v8":
         cmd = ["node", v8, "--one", path, str(index), seconds, passes]
+        # V8 reads the texts as they were downloaded, not this harness's copies, so that its count, which the count
+        # gate holds every engine here to, does not depend on how this harness reads a text.
+        env = {k: v for k, v in os.environ.items() if k != "CORVUS_REGEX_PLAIN"}
     elif program:
         cmd = [program, "--one", path, str(index), engine, seconds, passes]
     else:
         cmd = exe + ["--one", path, str(index), engine, seconds, passes]
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30).stdout
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env).stdout
     except subprocess.TimeoutExpired:
         return dict(STOPPED)
     line = out.strip().splitlines()
@@ -200,7 +206,7 @@ def main() -> int:
     for w in workloads:
         path = os.path.join(plain, w["file"].removesuffix(".gz"))
         if not os.path.exists(path):
-            with open(path, "w", encoding="utf-8") as f:
+            with open(path, "w", encoding="utf-8", newline="") as f:
                 f.write(load_text(w["file"]))
     os.environ["CORVUS_REGEX_PLAIN"] = plain
     exe = [sys.executable, os.path.abspath(__file__)]
