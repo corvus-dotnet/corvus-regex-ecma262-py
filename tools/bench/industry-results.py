@@ -93,6 +93,14 @@ over = facts.get("spread_over", "")
 spread = (f"over {float(facts.get('spread_limit', 0)) * 100:.0f}% (slowest - fastest) / median: {over}" if over
           else f"every figure within {float(facts.get('spread_limit', 0)) * 100:.0f}% (slowest - fastest) / median")
 runtime = "; ".join(x for x in (facts.get("python", ""), v8["engine"] if v8 else "") if x)
+
+# The encodings each engine's runner answers in, which the central benchmark page's compliance figure is a share of:
+# every answer the test data asks in those encodings, so an answer the runner did not ask counts against the engine.
+ENCODINGS = {"v8": ["utf16"]}
+for key, _, _, _, counts in ENGINES:
+    if isinstance(counts, dict):
+        counts["encodings"] = ENCODINGS.get(key, ["utf16", "utf8"])
+
 data = {
     "meta": {
         "title": "corvus-regex-ecma262 from Python: the Industry benchmarks",
