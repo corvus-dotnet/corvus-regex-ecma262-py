@@ -1,4 +1,6 @@
 """The package's tests: each member over str and bytes, against the answers V8 gives."""
+import array
+import sys
 import threading
 
 import pytest
@@ -232,6 +234,37 @@ def test_the_default_timeout():
         ecma.compile("a", timeout=-1)
 
 
+def units(s):
+    """The UTF-16 code units of a str, lone surrogates and all, in the machine's byte order."""
+    return array.array("H", s.encode("utf-16-le" if sys.byteorder == "little" else "utf-16-be", "surrogatepass"))
+
+
+def test_code_units():
+    t = units("\U0001F600a\ud800b")
+    assert list(t) == [0xD83D, 0xDE00, 0x61, 0xD800, 0x62]
+    # Between the halves of a character: without u the trail half is a unit of its own; with u the search moves back
+    # to the pair's start, as RegExp's does.
+    m = ecma.compile(".", "y").search(t, 1)
+    assert m.span() == (1, 2) and list(m.group()) == [0xDE00] and isinstance(m.group(), array.array)
+    m = ecma.compile(".", "uy").search(t, 1)
+    assert m.span() == (0, 2) and list(m.group()) == [0xD83D, 0xDE00]
+    assert [m.span() for m in ecma.compile(".", "g").finditer(t)] == [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)]
+    assert [m.span() for m in ecma.compile(".", "gu").finditer(t)] == [(0, 2), (2, 3), (3, 4), (4, 5)]
+    assert [m.span() for m in ecma.compile(r"\ud800", "g").finditer(t)] == [(3, 4)]
+    assert ecma.compile("b").test(t, 4) and not ecma.compile("b").test(t, 5) and ecma.compile("b").search(t, 6) is None
+    # Replace (a template of code units or a str, or a function that returns code units) and split.
+    r = ecma.compile("a")
+    assert list(r.replace(t, "X")) == [0xD83D, 0xDE00, 0x58, 0xD800, 0x62]
+    assert list(r.replace(t, units("$&$&"))) == [0xD83D, 0xDE00, 0x61, 0x61, 0xD800, 0x62]
+    assert list(r.replace(t, lambda m: units("AB"))) == [0xD83D, 0xDE00, 0x41, 0x42, 0xD800, 0x62]
+    with pytest.raises(TypeError):
+        r.replace(t, lambda m: "AB")
+    assert [list(p) for p in r.split(t)] == [[0xD83D, 0xDE00], [0xD800, 0x62]]
+    assert [None if p is None else list(p) for p in ecma.compile("(x)?a").split(t)] == [[0xD83D, 0xDE00], None, [0xD800, 0x62]]
+    with pytest.raises(TypeError):
+        r.search(array.array("i", [1]))
+
+
 def test_types():
     r = ecma.compile("a")
     with pytest.raises(TypeError):
@@ -285,3 +318,16 @@ def test_nested_classes_on_a_small_stack():
     finally:
         threading.stack_size(previous)
     assert results == [True, "too_large", "too_large"]
+
+
+def test_bytes_that_are_not_utf8_are_refused():
+    # Each method refuses them before it reads any, even where a match would end before them.
+    re = ecma.compile("a")
+    for text in (b"a\xff", b"\xc0\x80", b"a\xed\xa0\x80", b"\xf0\x9f\x98", "a".encode() * 300 + b"\x80"):
+        calls = (re.test, re.search, re.finditer, re.split, lambda t: re.replace(t, b"b"),
+                 lambda t: re.replace_all(t, b"b"))
+        for call in calls:
+            with pytest.raises(ValueError) as e:
+                call(text)
+            assert not isinstance(e.value, ecma.error)
+            assert "utf-8" in str(e.value).lower()

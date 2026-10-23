@@ -7,7 +7,9 @@
 //! unit, so a match can take half of one) or when the text holds a lone surrogate, which has no UTF-8. Positions are
 //! given in code points, as Python indexes a `str`; a position between the halves of a character is given as the
 //! character's start for a start and its end for an end. `bytes` are UTF-8, matched as they are, positions in bytes.
-//! Every match runs without the GIL.
+//! An `array.array` of typecode 'H' is UTF-16 code units, matched as they are, positions in code units: the text as
+//! JavaScript holds it, a position between the halves of a character and a lone surrogate included, which a `str`,
+//! indexed by code point, cannot give. Every match runs without the GIL.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -68,6 +70,8 @@ enum Hay {
     Utf16(Arc<Vec<u16>>),
     /// `bytes`, UTF-8 (checked when the Hay is made), positions in bytes.
     Bytes { _b: Py<PyBytes>, text: Utf8Text },
+    /// An `array.array('H')`: UTF-16 code units, positions in code units.
+    Units(Arc<Vec<u16>>),
 }
 
 /// The engine's text for the length of a call.
@@ -82,13 +86,13 @@ impl Hay {
         match self {
             // SAFETY: the Hay holds the object the text is in, and the text was UTF-8 when it was taken.
             Hay::Utf8 { text, .. } | Hay::Bytes { text, .. } => View::Utf8(unsafe { text.get() }),
-            Hay::Utf16(u) => View::Utf16(u),
+            Hay::Utf16(u) | Hay::Units(u) => View::Utf16(u),
         }
     }
 
-    /// The text's units counted as Python counts them: identity for ASCII and bytes.
+    /// The text's units counted as Python counts them: identity for ASCII, bytes and code units.
     fn identity(&self) -> bool {
-        matches!(self, Hay::Utf8 { ascii: true, .. } | Hay::Bytes { .. })
+        matches!(self, Hay::Utf8 { ascii: true, .. } | Hay::Bytes { .. } | Hay::Units(_))
     }
 }
 
@@ -150,15 +154,14 @@ impl Positions {
         }
     }
 
-    /// The engine position of a code point index (the text's end when it is past it).
+    /// The engine position of a code point index (the text's end when it is past it); with `identity` (ASCII, bytes
+    /// and code units) the position itself.
     fn unit(view: View<'_>, identity: bool, point: usize) -> usize {
+        if identity {
+            return point.min(Regex::text_len(view));
+        }
         match view {
-            View::Utf8(s) => {
-                if identity {
-                    return point.min(s.len());
-                }
-                s.char_indices().nth(point).map_or(s.len(), |(b, _)| b)
-            }
+            View::Utf8(s) => s.char_indices().nth(point).map_or(s.len(), |(b, _)| b),
             View::Utf16(units) => {
                 let mut u = 0;
                 let mut p = 0;
@@ -226,6 +229,31 @@ fn units_of(s: &Bound<'_, PyString>) -> PyResult<Vec<u16>> {
     Ok(bytes.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect())
 }
 
+/// The type `array.array`.
+fn array_type(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+    py.import("array")?.getattr("array")
+}
+
+/// The code units of an `array.array('H')`, which holds them in the machine's byte order.
+fn units_of_array(a: &Bound<'_, PyAny>) -> PyResult<Vec<u16>> {
+    let typecode: String = a.getattr("typecode")?.extract()?;
+    if typecode != "H" {
+        return Err(PyTypeError::new_err(format!(
+            "an array of UTF-16 code units has the typecode 'H', not {typecode:?}"
+        )));
+    }
+    let bytes = a.call_method0("tobytes")?;
+    Ok(bytes.cast::<PyBytes>()?.as_bytes().as_chunks::<2>().0.iter().map(|c| u16::from_ne_bytes(*c)).collect())
+}
+
+/// An `array.array('H')` of code units.
+fn array_of_units<'py>(py: Python<'py>, units: &[u16]) -> PyResult<Bound<'py, PyAny>> {
+    let a = array_type(py)?.call1(("H",))?;
+    let bytes: Vec<u8> = units.iter().flat_map(|u| u.to_ne_bytes()).collect();
+    a.call_method1("frombytes", (PyBytes::new(py, &bytes),))?;
+    Ok(a)
+}
+
 /// A compiled ECMA-262 regular expression: `Regex(pattern, flags="")`, as `new RegExp(pattern, flags)`.
 #[pyclass(frozen, module = "corvus_regex_ecma262", name = "Regex")]
 struct Regex {
@@ -237,7 +265,7 @@ struct Regex {
 }
 
 impl Regex {
-    /// The engine's text for a `str` or `bytes`.
+    /// The engine's text for a `str`, `bytes` or an `array.array('H')`.
     fn hay(&self, text: &Bound<'_, PyAny>) -> PyResult<Hay> {
         if let Ok(s) = text.cast::<PyString>() {
             let Ok(utf8) = s.to_str() else {
@@ -260,7 +288,13 @@ impl Regex {
             };
             return Ok(Hay::Bytes { _b: b.clone().unbind(), text: Utf8Text::of(text) });
         }
-        Err(PyTypeError::new_err(format!("expected str or bytes, not {}", text.get_type().name()?)))
+        if text.is_instance(&array_type(text.py())?)? {
+            return Ok(Hay::Units(Arc::new(units_of_array(text)?)));
+        }
+        Err(PyTypeError::new_err(format!(
+            "expected str, bytes or an array.array('H') of UTF-16 code units, not {}",
+            text.get_type().name()?
+        )))
     }
 
     /// The groups of a match, in engine positions: the whole match, then each group (None for one that did not take
@@ -559,7 +593,11 @@ impl Regex {
                         None => inner.split_utf16(u),
                     })
                     .map_err(limit_error)?;
-                pieces.into_iter().map(|p| p.map(|p| str_of_units(py, &p)).transpose()).collect()
+                let units = matches!(hay, Hay::Units(_));
+                pieces
+                    .into_iter()
+                    .map(|p| p.map(|p| if units { array_of_units(py, &p) } else { str_of_units(py, &p) }).transpose())
+                    .collect()
             }
         }
     }
@@ -582,6 +620,7 @@ impl Regex {
         let view = hay.view();
         let inner = &this.inner;
         let bytes = matches!(*hay, Hay::Bytes { .. });
+        let units = matches!(*hay, Hay::Units(_));
         if !replacement.is_callable() {
             match view {
                 View::Utf8(s) => {
@@ -610,17 +649,29 @@ impl Regex {
                     });
                 }
                 View::Utf16(u) => {
-                    let template =
+                    let template = if units {
+                        // Code units, or a str (its UTF-16, lone surrogates and all).
+                        match replacement.cast::<PyString>() {
+                            Ok(s) => units_of(s)?,
+                            Err(_) if replacement.is_instance(&array_type(py)?)? => units_of_array(replacement)?,
+                            Err(_) => {
+                                return Err(PyTypeError::new_err(
+                                    "the replacement of an array of code units must be an array('H'), a str or a function",
+                                ));
+                            }
+                        }
+                    } else {
                         units_of(replacement.cast::<PyString>().map_err(|_| {
                             PyTypeError::new_err("the replacement of a str must be a str or a function")
-                        })?)?;
+                        })?)?
+                    };
                     let out = py
                         .detach(|| {
                             if all { inner.replace_all_utf16(u, &template) } else { inner.replace_utf16(u, &template) }
                                 .map(|o| o.into_owned())
                         })
                         .map_err(limit_error)?;
-                    return str_of_units(py, &out);
+                    return if units { array_of_units(py, &out) } else { str_of_units(py, &out) };
                 }
             }
         }
@@ -636,7 +687,13 @@ impl Regex {
             pieces.push(Regex::slice(py, &hay, view, last, s)?);
             let m = Match::new(slf, string, &hay, spans, &positions);
             let put = replacement.call1((m,))?;
-            let ok = if bytes { put.cast::<PyBytes>().is_ok() } else { put.cast::<PyString>().is_ok() };
+            let ok = if bytes {
+                put.cast::<PyBytes>().is_ok()
+            } else if units {
+                put.is_instance(&array_type(py)?)?
+            } else {
+                put.cast::<PyString>().is_ok()
+            };
             if !ok {
                 return Err(PyTypeError::new_err("the replacement function must return the type of the string"));
             }
@@ -648,6 +705,13 @@ impl Regex {
             at = if e == s { this.advance(view, e) } else { e };
         }
         pieces.push(Regex::slice(py, &hay, view, last, len)?);
+        if units {
+            let out = array_type(py)?.call1(("H",))?;
+            for piece in pieces {
+                out.call_method1("extend", (piece,))?;
+            }
+            return Ok(out);
+        }
         let empty = if bytes { PyBytes::new(py, b"").into_any() } else { PyString::new(py, "").into_any() };
         empty.call_method1("join", (pieces,))
     }
@@ -657,6 +721,7 @@ impl Regex {
         Ok(match (hay, view) {
             (Hay::Bytes { .. }, View::Utf8(s)) => PyBytes::new(py, &s.as_bytes()[a..b]).into_any(),
             (_, View::Utf8(s)) => PyString::new(py, &String::from_utf8_lossy(&s.as_bytes()[a..b])).into_any(),
+            (Hay::Units(_), View::Utf16(u)) => array_of_units(py, &u[a..b])?,
             (_, View::Utf16(u)) => str_of_units(py, &u[a..b])?,
         })
     }

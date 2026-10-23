@@ -19,6 +19,18 @@ package do not claim it, and carry "not ECMA-262".
 """
 import argparse, json, os, re
 
+
+def failure(r):
+    """A figure the harness gave no time for, as the data file carries it: stopped at the harness's limit
+    ({"limit": s}), a count of matches that differs from V8's ({"wrongCount": {"counted": n, "v8": m}}), or another
+    failure with what the harness said ({"error": "..."})."""
+    if "limit" in r:
+        return {"limit": r["limit"]}
+    m = re.match(r"counted (\d+) where V8 counts (\d+)", str(r.get("error", "")))
+    if m:
+        return {"wrongCount": {"counted": int(m.group(1)), "v8": int(m.group(2))}}
+    return {"error": r["error"]} if "error" in r else None
+
 ap = argparse.ArgumentParser()
 ap.add_argument("--run", required=True)
 ap.add_argument("--out", required=True)
@@ -65,14 +77,14 @@ for key, name, _, _, _ in ENGINES:
         r = rows.get(w)
         if r is None:
             continue
-        results[name][w] = None if "error" in r else {"time": {"median": r["median"], "min": r["min"], "max": r["max"]}}
+        results[name][w] = failure(r) if "error" in r else {"time": {"median": r["median"], "min": r["min"], "max": r["max"]}}
 if v8:
     v8_name = "V8"
     ENGINES.append(("v8", v8_name, "V8", v8["engine"], compliance("v8")))
     results[v8_name] = {}
     for w in ids:
         r = v8["results"].get(w)
-        results[v8_name][w] = {"time": {"median": r["median"], "min": r["min"], "max": r["max"]}} if r and "error" not in r else None
+        results[v8_name][w] = {"time": {"median": r["median"], "min": r["min"], "max": r["max"]}} if r and "error" not in r else (failure(r) if r else None)
 # Where re or regex counts otherwise than V8 (the oracle), the row says so; an ECMA-262 engine that does is an error
 # above.
 differs = {}
@@ -93,6 +105,14 @@ over = facts.get("spread_over", "")
 spread = (f"over {float(facts.get('spread_limit', 0)) * 100:.0f}% (slowest - fastest) / median: {over}" if over
           else f"every figure within {float(facts.get('spread_limit', 0)) * 100:.0f}% (slowest - fastest) / median")
 runtime = "; ".join(x for x in (facts.get("python", ""), v8["engine"] if v8 else "") if x)
+
+# The encodings each engine's runner answers in, which the central benchmark page's compliance figure is a share of:
+# every answer the test data asks in those encodings, so an answer the runner did not ask counts against the engine.
+ENCODINGS = {"v8": ["utf16"]}
+for key, _, _, _, counts in ENGINES:
+    if isinstance(counts, dict):
+        counts["encodings"] = ENCODINGS.get(key, ["utf16", "utf8"])
+
 data = {
     "meta": {
         "title": "corvus-regex-ecma262 from Python: the Industry benchmarks",

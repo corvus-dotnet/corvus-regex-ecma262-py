@@ -10,17 +10,23 @@ unicode_sets answers). A text is matched as a str (positions in code points) and
 a text with a lone surrogate has no UTF-8 form and is matched as a str alone. Records marked v8_deviation are left out.
 Any difference from V8 is a wrong answer; a refusal of a valid pattern, an acceptance of an invalid one, and a match
 that reaches its limit are counted apart and listed too. captures.jsonl is judged on exec, the global search, the
-sticky flag, replace and split, over the str and over the bytes. A match is given 2 seconds.
+sticky flag, replace and split, over the str and over the bytes; the sticky flag's search at UTF-16 index 1, where
+that falls between the halves of the first character (which a str position cannot name), over the text's code units
+as an array('H'). A match is given 2 seconds.
 
 The data gives positions in UTF-16 code units. Over a str they are compared as the package gives them, in code
 points, a position between the halves of a character (which a match without u or v can reach) as the character's
 start for a start and its end for an end; over bytes they are compared in bytes, such a position as the character's
 third byte, as the crate gives it. Texts are compared exactly over a str (a half character is a lone surrogate, as in
 V8's answer), and over bytes with V8's answer converted to UTF-8, a lone surrogate as U+FFFD.
+
+ill-formed-utf8.jsonl holds bytes that are not UTF-8, each one answer over UTF-8 under each grammar the pattern is valid
+in, whose right answer is a refusal: the package's ValueError for bytes that are not UTF-8.
 """
 from __future__ import annotations
 
 import argparse
+import array
 import fnmatch
 import json
 import os
@@ -80,6 +86,11 @@ def units_to_bytes(s: str):
 def shown(pattern: str) -> str:
     """The pattern as the Rust runner shows it: through UTF-8 (a lone surrogate as U+FFFD) and back, escaped."""
     return escape(utf8_lossy(pattern).decode())
+
+
+def code_units(s: str) -> array.array:
+    """The UTF-16 code units of s, lone surrogates and all, as the package takes them: an array('H')."""
+    return array.array("H", s.encode("utf-16-le" if sys.byteorder == "little" else "utf-16-be", "surrogatepass"))
 
 
 def escape(s: str) -> str:
@@ -163,6 +174,46 @@ def judge_tests(name, r, pattern, c, w):
                     w.append(f"WRONG\t{head}\t{escape(text)}\t{enc}\texpected {'true' if expected else 'false'}")
 
 
+def judge_ill_formed(r, pattern, c, w):
+    name = "ill-formed-utf8.jsonl"
+    flags = r.get("flags", "")
+    head_pattern = shown(pattern)
+    for suffix, _, valid in modes_of(r):
+        mode_flags = flags + suffix
+        head = f"{name}\t/{head_pattern}/{mode_flags}"
+        re, message, is_error = compile_or_why(pattern, mode_flags)
+        if re is None:
+            if is_error:
+                c.errors += 1
+            if valid:
+                c.refused += 1
+                w.append(f"REFUSED\t{head}\t{message.splitlines()[0] if message else ''}")
+            continue
+        if not valid:
+            c.accepted += 1
+            w.append(f"ACCEPTED-INVALID\t{head}")
+            continue
+        for test in r.get("tests", []):
+            subject = bytes.fromhex(test["bytes"])
+            try:
+                got = re.test(subject, timeout=LIMIT)
+            except ecma.MatchLimitError as e:
+                c.limited += 1
+                w.append(f"LIMIT\t{head}\t{test['bytes']}\tutf8\t{'memory' if 'memory' in str(e) else 'time'}")
+                continue
+            except ValueError as e:
+                # The package's refusal of bytes that are not UTF-8 (a MatchLimitError is a ValueError too, and is
+                # caught above).
+                if "utf-8" in str(e).lower():
+                    c.right += 1
+                else:
+                    c.errors += 1
+                    w.append(f"ERROR\t{head}\t{test['bytes']}\tutf8\t{type(e).__name__}: {e}")
+                continue
+            c.wrong += 1
+            w.append(f"WRONG\t{head}\t{test['bytes']}\tutf8\tread as UTF-8 ({got}), not refused")
+
+
 def same_slots(expected, m, starts, ends):
     """Whether a match's groups are the expected [start, end] pairs (None for a group that did not take part), the
     expected positions mapped by starts and ends (identity when None)."""
@@ -243,11 +294,14 @@ def judge_mode(where, a, text, re, g, y, c, w):
     if utf8 is not None:
         check("all-utf8", judge_all(g.finditer(utf8), all_, byte_at, byte_at))
 
-    # Sticky at UTF-16 index 1, where that is a position of the str (not between the halves of a character).
+    # Sticky at UTF-16 index 1: over the str where that is a position of it, and over code units where it falls
+    # between the halves of the first character, which a str position cannot name (positions then are the data's own).
     if text:
         sticky = a.get("sticky")
         if ord(text[0]) <= 0xFFFF:
             check("sticky", same_slots(sticky, y.search(text, 1), starts, ends))
+        else:
+            check("sticky", same_slots(sticky, y.search(code_units(text), 1), None, None))
         if utf8 is not None and (byte_at[1] >= len(utf8) or (utf8[byte_at[1]] & 0xC0) != 0x80):
             check("sticky-utf8", same_slots(sticky, y.search(utf8, byte_at[1]), byte_at, byte_at))
 
@@ -313,6 +367,8 @@ def judge_lines(args):
             continue
         if name == "captures.jsonl":
             judge_captures(r, pattern, c, w)
+        elif name == "ill-formed-utf8.jsonl":
+            judge_ill_formed(r, pattern, c, w)
         else:
             judge_tests(name, r, pattern, c, w)
     return c, w, records, skipped

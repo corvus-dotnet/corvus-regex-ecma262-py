@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "corvus-regex-ecma262"
-version = "0.2.0"
+version = "0.2.1"
 description = "ECMA-262 (JavaScript) regular expressions for Python: the grammar and the answers of RegExp, every flag, backed by the corvus-regex-ecma262 Rust crate."
 readme = "README.md"
 license = "Apache-2.0"
