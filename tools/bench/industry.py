@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The Industry benchmark from Python: each workload counted by each engine, in nanoseconds per count, under the
-interleaved protocol every Corvus ECMA-262 engine's harness follows (docs/benchmarks/README.md in
+interleaved protocol every harness of the central benchmark page follows (docs/benchmarks/README.md in
 corvus-regex-ecma262-rs), a port of the C harness's driver (tools/c/industry.c there):
 
     industry.py <workloads.json> [--engines corvus-str,corvus-bytes,re,regex,v8] [--v8 <industry.mjs>]
