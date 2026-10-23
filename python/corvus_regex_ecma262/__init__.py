@@ -11,7 +11,8 @@ the corvus-regex-ecma262 Rust crate.
     '10/2026, 01/2027'
 
 A ``str`` is matched with positions in code points, as Python indexes it; ``bytes`` are UTF-8, with positions in
-bytes. Without the u or v flag a pattern is matched by UTF-16 code unit, as ECMA-262 matches it, so a match can take
+bytes; an ``array.array('H')`` is UTF-16 code units, as JavaScript holds a string, with positions in code units (so a
+position between the halves of a character can be named). Without the u or v flag a pattern is matched by UTF-16 code unit, as ECMA-262 matches it, so a match can take
 half of a character beyond the Basic Multilingual Plane: its text then holds that half as a lone surrogate, as a
 JavaScript string would, and its start and end are given as the whole character's.
 
@@ -34,7 +35,7 @@ from ._native import (
     set_default_timeout,
 )
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 __all__ = [
     "MAX_NESTING",

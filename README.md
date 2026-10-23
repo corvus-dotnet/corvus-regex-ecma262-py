@@ -10,7 +10,8 @@ wheels for Linux (glibc and musl), macOS and Windows, x64 and arm64, for every P
   of strings.
 - ECMAScript 2025: lookbehind, named groups (and a name shared between alternatives), modifier groups such as
   `(?i:...)`, and every Unicode property ECMA-262 lists, from Unicode 17 tables the crate carries.
-- `str` and `bytes` (UTF-8). A pattern answers as it does in a browser or Node, which Python's `re` does not: `\d`,
+- `str`, `bytes` (UTF-8) and `array.array('H')` (UTF-16 code units, as JavaScript holds a string). A pattern answers
+  as it does in a browser or Node, which Python's `re` does not: `\d`,
   `\w`, `\b`, `.` and `$`, case folding, `\p{...}` and the rest read as JavaScript reads them.
 - Every match runs without the GIL. A pattern without a backreference is matched in time proportional to its size times
   the text, and a pattern can be given a match timeout, as a `Regex` of .NET can, which every method honours and which
@@ -18,10 +19,10 @@ wheels for Linux (glibc and musl), macOS and Windows, x64 and arm64, for every P
 
 **Compliance.** Over the [ECMA-262 test data](https://github.com/corvus-dotnet/ecma262-regex-test-data) (what V8 says
 about 117,889 patterns and 5,884,566 texts, test262's and `exec`, the global search, `replace` and `split` among
-them), through this package over `str` and over `bytes`, it gives 26,929,347 right answers and none wrong, refuses
-no valid pattern, accepts no invalid one and reaches no limit. CI runs the whole data on Linux and Windows on every change. (The data
-asks 21,482 more questions, each a search that starts between the two halves of a character beyond the Basic
-Multilingual Plane, which a `str` position cannot name; the crate answers them all over UTF-16.)
+them), through this package over `str`, `bytes` and code units, it gives 26,950,829 right answers, every answer the
+data asks, and none wrong, refuses no valid pattern, accepts no invalid one and reaches no limit. CI runs the whole data
+on Linux and Windows on every change. (A search that starts between the two halves of a character beyond the Basic
+Multilingual Plane, which a `str` position cannot name, is asked over code units.)
 
 ## Install
 
@@ -76,6 +77,13 @@ Multilingual Plane, as in JavaScript: over a `str` its text holds that half as a
 string would, and its start and end are the whole character's; over `bytes` the position between the halves is the
 character's third byte. A `str` may hold lone surrogates; a lone surrogate written into a pattern is read as U+FFFD
 (write it as the escape `\ud800` to match one).
+
+**Code units.** An `array.array('H')` is UTF-16 code units (in the machine's byte order, as `array` keeps them), matched
+as they are, positions in code units: the text as JavaScript holds it, so a position between the halves of a character
+can be given (`search(units, 1)` after a character beyond the Basic Multilingual Plane) and is given back as it is.
+Every method takes one; a group, a piece of `split` and the result of `replace` are arrays of code units, and a
+replacement may be one or a `str`. `array.array('H', s.encode('utf-16-le', 'surrogatepass'))` makes one from a `str`
+on a little-endian machine.
 
 **Errors.** `error` (a `ValueError`) says why a pattern did not compile in its message and in `kind`: `"pattern"`,
 `"flags"` or `"too_large"`. A match that reaches its timeout, or its cap on backtracking memory, raises
