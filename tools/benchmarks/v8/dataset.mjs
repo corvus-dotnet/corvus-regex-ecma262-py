@@ -98,14 +98,17 @@ function execAnswer(re, flags, text, lastIndex) {
 const LIMIT_MS = 2000;
 const from = process.env.DATASET_FROM ? process.env.DATASET_FROM.split("\t") : null;
 const limitMode = process.env.DATASET_LIMIT === "1";
-const started = new Float64Array(new SharedArrayBuffer(8));
+// When the answer being given began, in milliseconds since the epoch (0 when none is being given), shared with the
+// watchdog through Atomics, without which another thread may read a stale time.
+const started = new BigInt64Array(new SharedArrayBuffer(8));
 if (limitMode && only) {
   new Worker(`
     const { workerData } = require("node:worker_threads");
     const { writeSync } = require("node:fs");
-    const started = new Float64Array(workerData);
+    const started = new BigInt64Array(workerData);
     setInterval(() => {
-      if (started[0] !== 0 && Date.now() - started[0] > ${LIMIT_MS}) {
+      const s = Number(Atomics.load(started, 0));
+      if (s !== 0 && Date.now() - s > ${LIMIT_MS}) {
         writeSync(2, "\\nL\\n");
         process.kill(process.pid, "SIGKILL");
       }
@@ -135,9 +138,9 @@ function judgeFile(name) {
       write(true);
       return;
     }
-    started[0] = Date.now();
+    Atomics.store(started, 0, BigInt(Date.now()));
     const ok = judged();
-    started[0] = 0;
+    Atomics.store(started, 0, 0n);
     if (ok) fr++; else fw++;
     write(true);
   };
