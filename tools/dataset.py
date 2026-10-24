@@ -3,6 +3,7 @@
 judged by the data's own rule ("How a runner judges an engine" in its README) as the C library's runner judges it:
 
     python tools/dataset.py <data directory> <wrong-cases output file> [--files <filter>] [--workers N]
+                            [--compliance <file>]
 
 Each record is asked about under each grammar V8 found it valid in: the record's flags with u added (the unicode
 answers), the record's flags alone (the legacy answers) and, in the file that has them, the flags with v added (the
@@ -22,6 +23,16 @@ V8's answer), and over bytes with V8's answer converted to UTF-8, a lone surroga
 
 ill-formed-utf8.jsonl holds bytes that are not UTF-8, each one answer over UTF-8 under each grammar the pattern is valid
 in, whose right answer is a refusal: the package's ValueError for bytes that are not UTF-8.
+
+exec/test262.jsonl, the exec calls of test262 (in a directory of its own), is judged last: each call one exec with the
+record's flags from its lastIndex, right when the positions of the match and of every group, the named groups and, with
+g or y, the lastIndex after are V8's; one answer over the text's code units as an array('H') (positions in code units,
+the data's own, since lastIndex can fall between the halves of a character) and, when the text holds no lone surrogate
+and lastIndex is not between the halves of a pair, one over UTF-8 bytes with positions in bytes.
+
+With --compliance <file>, the engine's compliance object is written to the file, as the benchmark page reads it
+(docs/implementing-a-source.md in corvus-regex-ecma262-benchmarks): the counts, this runner and the calls it makes in
+each encoding, and what it leaves out, which for this package is nothing.
 """
 from __future__ import annotations
 
@@ -352,6 +363,89 @@ def judge_captures(r, pattern, c, w):
                 w.append(f"ERROR\tcaptures.jsonl\t{where}\t{type(e).__name__}: {e}")
 
 
+EXEC = "exec/test262.jsonl"
+
+
+def last_index_of(t, length):
+    """A call's lastIndex. Past the end of the text exec gives null; test262 sets it as far as 2^53 - 1 and
+    Number.MAX_VALUE, so anything past the end reads as the text's length plus one."""
+    v = t["lastIndex"]
+    return length + 1 if v > length else int(v)
+
+
+def inside_pair(units, at):
+    """Whether a position is between the halves of a surrogate pair, where UTF-8 has no position."""
+    return 0 < at < len(units) and 0xDC00 <= units[at] <= 0xDFFF and 0xD800 <= units[at - 1] <= 0xDBFF
+
+
+def same_exec(answer, m, names, carries, at):
+    """Whether a match (None for none) is the call's answer: both null, or the same groups, the same named groups
+    (present exactly when the pattern has names) and, with g or y, a lastIndex after at the match's end. at maps the
+    answer's UTF-16 positions to the match's."""
+    if answer is None or m is None:
+        return answer is None and m is None
+    span = lambda e: (-1, -1) if e is None else (at[e[0]], at[e[1]])
+    captures = answer["captures"]
+    if len(captures) != m.re.groups + 1 or any(m.span(g) != span(e) for g, e in enumerate(captures)):
+        return False
+    groups = answer.get("groups")
+    if groups is None:
+        if names:
+            return False
+    elif sorted(groups) != sorted(names) or any(m.span(n) != span(e) for n, e in groups.items()):
+        return False
+    return not carries or at[answer["lastIndex"]] == m.end(0)
+
+
+def judge_exec(r, pattern, c, w):
+    """A record of exec/test262.jsonl: the pattern with its own flags (g, y and d among them), from each lastIndex."""
+    flags = r["flags"]
+    re, why, is_error = compile_or_why(pattern, flags)
+    if re is None:
+        c.refused += 1
+        w.append(f"REFUSED\t{EXEC}\t/{shown(pattern)}/{flags}\t{why}")
+        return
+    carries = "g" in flags or "y" in flags
+    names = re.group_names
+    for t in r.get("tests") or []:
+        if t.get("v8_deviation"):
+            continue
+        text = t["text"]
+        units = code_units(text)
+        start = last_index_of(t, len(units)) if carries else 0
+        answer = t["answer"]
+        where = f"/{shown(pattern)}/{flags}\t{escape(text)}\t{t['lastIndex']}"
+        for encoding, subject, at in [("utf16", units, range(len(units) + 1))] + (
+                [] if lone(text) or inside_pair(units, start) else [("utf8", text.encode(), units_to_bytes(text))]):
+            try:
+                m = None if start > len(units) else re.search(subject, at[start], timeout=LIMIT)
+            except ecma.MatchLimitError:
+                c.limited += 1
+                w.append(f"LIMIT\t{EXEC}\t{where}\t{encoding}")
+                continue
+            if same_exec(answer, m, names, carries, at):
+                c.right += 1
+            else:
+                c.wrong += 1
+                w.append(f"WRONG\t{EXEC}\t{where}\t{encoding}")
+
+
+def write_compliance(path, total):
+    """The engine's compliance as the benchmark page reads it: the counts, this runner and the calls it makes in each
+    encoding, and what it leaves out."""
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"right": total.right, "wrong": total.wrong, "refused": total.refused, "acceptedInvalid": total.accepted,
+                   "limited": total.limited + total.errors,
+                   "judge": {"runner": "https://github.com/corvus-dotnet/corvus-regex-ecma262-py/blob/main/tools/dataset.py",
+                             "calls": {"utf16": ["Regex.test(str)", "Regex.search(str)", "Regex.search(array)",
+                                                 "Regex.finditer(str)", "Regex.replace(str)", "Regex.replace_all(str)",
+                                                 "Regex.split(str)"],
+                                       "utf8": ["Regex.test(bytes)", "Regex.search(bytes)", "Regex.finditer(bytes)",
+                                                "Regex.replace(bytes)", "Regex.replace_all(bytes)"]}},
+                   "excludes": []}, f)
+        f.write("\n")
+
+
 def judge_lines(args):
     name, lines = args
     c, w = Counts(), []
@@ -367,7 +461,9 @@ def judge_lines(args):
         pattern = r.get("pattern")
         if pattern is None:
             continue
-        if name == "captures.jsonl":
+        if name == EXEC:
+            judge_exec(r, pattern, c, w)
+        elif name == "captures.jsonl":
             judge_captures(r, pattern, c, w)
         elif name == "ill-formed-utf8.jsonl":
             judge_ill_formed(r, pattern, c, w)
@@ -382,8 +478,12 @@ def main():
     ap.add_argument("wrong")
     ap.add_argument("--files", default="*.jsonl")
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--compliance")
     args = ap.parse_args()
     files = sorted(f for f in os.listdir(args.data) if f.endswith(".jsonl") and fnmatch.fnmatch(f, args.files))
+    # The exec calls of test262, in a directory of their own: with the default filter, or one that names them.
+    if (args.files == "*.jsonl" or args.files.startswith("exec")) and os.path.isfile(os.path.join(args.data, EXEC)):
+        files.append(EXEC)
     total, wrong = Counts(), []
     records = skipped = 0
     start = time.monotonic()
@@ -405,6 +505,8 @@ def main():
     with open(args.wrong, "w", encoding="utf-8", errors="surrogatepass") as f:
         for line in wrong:
             f.write(line + "\n")
+    if args.compliance:
+        write_compliance(args.compliance, total)
     print(f"\nrecords {records} (skipped {skipped} deviations)  right {total.right}  wrong {total.wrong}  "
           f"refused-valid {total.refused}  accepted-invalid {total.accepted}  limit {total.limited}  errors {total.errors}  "
           f"in {time.monotonic() - start:.1f}s")
