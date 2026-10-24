@@ -88,10 +88,11 @@ function execAnswer(re, flags, text, lastIndex) {
 // For a run with a limit of time on each answer (tools/benchmarks/tregex-compliance.py, for an engine that cannot be
 // stopped in a match), DATASET_LIMIT=1: each answer is written to stderr as it is given, and a watchdog thread ends
 // the process when one has run for LIMIT_MS, timed from just before the engine is called, writing "L". The lines are
-// "R <file> <index>" before each record, "S" for one left out, "C <done> <right> <wrong> <refused> <accepted>" for
-// what was counted since the last ("C 1" ends an answer), and "E" after the record. DATASET_FROM
-// ("<file>\t<index>\t<answer>") starts at that answer of that record, the answers before it (given by the process
-// before) not asked and what was counted among them not written again. The index of a record is that of its line
+// "R <file> <index>" before each record, "S" for one left out, "C <done> <right> <wrong> <refused> <accepted>
+// <unanswered>" for what was counted since the last ("C 1" ends an answer), and "E" after the record. DATASET_FROM
+// ("<file>\t<index>\t<answer>\t<spent>") starts at that answer of that record, the answers before it (given by the
+// process before) not asked and what was counted among them not written again; with spent 1, the record has had as many
+// answers at the limit as a record may, and its other answers are unanswered without being asked. The index of a record is that of its line
 // among the file's lines that are not empty, and an answer's is its place among the record's answers. V8's run sets
 // neither.
 const LIMIT_MS = 2000;
@@ -113,22 +114,27 @@ if (limitMode && only) {
 }
 // One file's counts.
 function judgeFile(name) {
-  let records = 0, skipped = 0, fr = 0, fw = 0, ff = 0, fa = 0;
-  let index = -1, next = 0, first = 0;
-  let written = [0, 0, 0, 0];
+  let records = 0, skipped = 0, fr = 0, fw = 0, ff = 0, fa = 0, fl = 0;
+  let index = -1, next = 0, first = 0, spent = false;
+  let written = [0, 0, 0, 0, 0];
   const write = (done) => {
     if (!limitMode) return;
-    const now = [fr, fw, ff, fa];
+    const now = [fr, fw, ff, fa, fl];
     process.stderr.write(`C\t${done ? 1 : 0}\t${now.map((v, k) => v - written[k]).join("\t")}\n`);
     written = now;
   };
   // One answer: whether `judged` finds it right.
   const ask = (judged) => {
     if (next++ < first) {
-      written = [fr, fw, ff, fa];
+      written = [fr, fw, ff, fa, fl];
       return;
     }
     write(false);
+    if (spent) {
+      fl++;
+      write(true);
+      return;
+    }
     started[0] = Date.now();
     const ok = judged();
     started[0] = 0;
@@ -148,8 +154,10 @@ function judgeFile(name) {
     }
     records++;
     next = 0;
-    first = from && name === from[0] && index === Number(from[1]) ? Number(from[2] ?? 0) : 0;
-    written = [fr, fw, ff, fa];
+    const here = from && name === from[0] && index === Number(from[1]);
+    first = here ? Number(from[2] ?? 0) : 0;
+    spent = here && from[3] === "1";
+    written = [fr, fw, ff, fa, fl];
     if (name === EXEC) {
       let re = null;
       try { re = new RegExp(r.pattern, r.flags.includes("d") ? r.flags : r.flags + "d"); } catch { re = null; }
@@ -188,7 +196,7 @@ function judgeFile(name) {
     write(false);
     if (limitMode) process.stderr.write("E\n");
   }
-  return { records, skipped, right: fr, wrong: fw, refused: ff, accepted: fa, limited: 0 };
+  return { records, skipped, right: fr, wrong: fw, refused: ff, accepted: fa, limited: fl };
 }
 
 if (only) {
