@@ -19,6 +19,7 @@
 // benchmark page reads it (docs/implementing-a-source.md in corvus-regex-ecma262-benchmarks): the counts, the runner
 // and the calls it makes, and what it leaves out (UTF-8, since a JavaScript string is UTF-16).
 import { spawnSync } from "node:child_process";
+import { Worker } from "node:worker_threads";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,25 +45,31 @@ function captures(m) {
   return out;
 }
 
-// The answers of captures.jsonl V8 gives, as generate-captures.js of the data writes them.
-function answers(pattern, flags, text) {
-  const re = new RegExp(pattern, flags + "d");
-  const g = new RegExp(pattern, flags + "dg");
-  const y = new RegExp(pattern, flags + "dy");
-  const a = { exec: captures(re.exec(text)), all: [] };
-  for (const m of text.matchAll(g)) {
-    a.all.push(captures(m));
-    if (a.all.length >= 20) break;
+// The answers of captures.jsonl, in order, as generate-captures.js of the data writes them; sticky is not asked of an
+// empty text.
+const CAPTURES = ["exec", "all", "sticky", "replace", "replaceAll", "split", "split3"];
+// One answer of captures.jsonl V8 gives, as generate-captures.js of the data writes it.
+function captureAnswer(what, pattern, flags, text) {
+  switch (what) {
+    case "exec": return captures(new RegExp(pattern, flags + "d").exec(text));
+    case "all": {
+      const all = [];
+      for (const m of text.matchAll(new RegExp(pattern, flags + "dg"))) {
+        all.push(captures(m));
+        if (all.length >= 20) break;
+      }
+      return all;
+    }
+    case "sticky": {
+      const y = new RegExp(pattern, flags + "dy");
+      y.lastIndex = 1;
+      return captures(y.exec(text));
+    }
+    case "replace": return text.replace(new RegExp(pattern, flags), REPLACEMENT);
+    case "replaceAll": return text.replace(new RegExp(pattern, flags + "g"), REPLACEMENT);
+    case "split": return text.split(new RegExp(pattern, flags)).map((s) => (s === undefined ? null : s));
+    default: return text.split(new RegExp(pattern, flags), 3).map((s) => (s === undefined ? null : s));
   }
-  if (text.length >= 1) {
-    y.lastIndex = 1;
-    a.sticky = captures(y.exec(text));
-  }
-  a.replace = text.replace(new RegExp(pattern, flags), REPLACEMENT);
-  a.replaceAll = text.replace(new RegExp(pattern, flags + "g"), REPLACEMENT);
-  a.split = text.split(new RegExp(pattern, flags)).map((s) => (s === undefined ? null : s));
-  a.split3 = text.split(new RegExp(pattern, flags), 3).map((s) => (s === undefined ? null : s));
-  return a;
 }
 // The answer of a call of exec/test262.jsonl V8 gives, as test262-exec.js of the data writes it: exec from the call's
 // lastIndex on a RegExp of the record's flags with d. The named groups are built by definition, not assignment, since a
@@ -78,99 +85,110 @@ function execAnswer(re, flags, text, lastIndex) {
   if (carries) a.lastIndex = re.lastIndex;
   return a;
 }
-// For a run with a limit of time on each record (tools/benchmarks/tregex-compliance.py, for an engine that does not
-// answer some records): DATASET_FROM ("<file>\t<index>") starts at that record, DATASET_LIMITED (lines of
-// "<file>\t<index>") names records not asked, whose answers are counted at the limit, and DATASET_PROGRESS=1 writes
-// each record's counts to stderr as it is judged. The index of a record is that of its line among the file's lines
-// that are not empty. V8's run sets none of them.
+// For a run with a limit of time on each answer (tools/benchmarks/tregex-compliance.py, for an engine that cannot be
+// stopped in a match), DATASET_LIMIT=1: each answer is written to stderr as it is given, and a watchdog thread ends
+// the process when one has run for LIMIT_MS, timed from just before the engine is called, writing "L". The lines are
+// "R <file> <index>" before each record, "S" for one left out, "C <done> <right> <wrong> <refused> <accepted>" for
+// what was counted since the last ("C 1" ends an answer), and "E" after the record. DATASET_FROM
+// ("<file>\t<index>\t<answer>") starts at that answer of that record, the answers before it (given by the process
+// before) not asked and what was counted among them not written again. The index of a record is that of its line
+// among the file's lines that are not empty, and an answer's is its place among the record's answers. V8's run sets
+// neither.
+const LIMIT_MS = 2000;
 const from = process.env.DATASET_FROM ? process.env.DATASET_FROM.split("\t") : null;
-const notAsked = new Set((process.env.DATASET_LIMITED ?? "").split("\n").filter(Boolean));
-const progress = process.env.DATASET_PROGRESS === "1";
-// The answers a record has, which a record not asked never gives: each test's answer where its grammar finds the
-// pattern valid (seven of them in captures.jsonl, six for an empty text). A verdict is counted only where it is wrong,
-// so a record not asked counts none.
-function answersOf(name, r, modes) {
-  if (name === EXEC) return (r.tests ?? []).filter((t) => !t.v8_deviation).length;
-  let n = 0;
-  for (const [, answer, valid] of modes) {
-    if (!valid) continue;
-    for (const t of r.tests ?? []) {
-      if (t.v8_deviation || !(answer in t)) continue;
-      n += name === "captures.jsonl" ? (t.text.length === 0 ? 6 : 7) : 1;
-    }
-  }
-  return n;
+const limitMode = process.env.DATASET_LIMIT === "1";
+const started = new Float64Array(new SharedArrayBuffer(8));
+if (limitMode && only) {
+  new Worker(`
+    const { workerData } = require("node:worker_threads");
+    const { writeSync } = require("node:fs");
+    const started = new Float64Array(workerData);
+    setInterval(() => {
+      if (started[0] !== 0 && Date.now() - started[0] > ${LIMIT_MS}) {
+        writeSync(2, "\\nL\\n");
+        process.kill(process.pid, "SIGKILL");
+      }
+    }, 10);
+  `, { eval: true, workerData: started.buffer }).unref();
 }
 // One file's counts.
 function judgeFile(name) {
-  let records = 0, skipped = 0, fr = 0, fw = 0, ff = 0, fa = 0, fl = 0;
-  let index = -1;
+  let records = 0, skipped = 0, fr = 0, fw = 0, ff = 0, fa = 0;
+  let index = -1, next = 0, first = 0;
+  let written = [0, 0, 0, 0];
+  const write = (done) => {
+    if (!limitMode) return;
+    const now = [fr, fw, ff, fa];
+    process.stderr.write(`C\t${done ? 1 : 0}\t${now.map((v, k) => v - written[k]).join("\t")}\n`);
+    written = now;
+  };
+  // One answer: whether `judged` finds it right.
+  const ask = (judged) => {
+    if (next++ < first) {
+      written = [fr, fw, ff, fa];
+      return;
+    }
+    write(false);
+    started[0] = Date.now();
+    const ok = judged();
+    started[0] = 0;
+    if (ok) fr++; else fw++;
+    write(true);
+  };
   for (const line of readFileSync(join(dir, name), "utf8").split("\n")) {
     if (!line) continue;
     index++;
     if (from && name === from[0] && index < Number(from[1])) continue;
     const r = JSON.parse(line);
+    if (limitMode) process.stderr.write(`R\t${name}\t${index}\n`);
     if (r.v8_deviation) {
       skipped++;
-      if (progress) process.stderr.write(`P\t${name}\t${index}\t0\t0\t0\t0\t0\t0\t1\n`);
+      if (limitMode) process.stderr.write("S\n");
       continue;
     }
     records++;
+    next = 0;
+    first = from && name === from[0] && index === Number(from[1]) ? Number(from[2] ?? 0) : 0;
+    written = [fr, fw, ff, fa];
     if (name === EXEC) {
-      const before = [fr, fw, ff, fa, fl];
-      if (notAsked.has(`${name}\t${index}`)) {
-        fl += answersOf(name, r, []);
-      } else {
-        let re = null;
-        try { re = new RegExp(r.pattern, r.flags.includes("d") ? r.flags : r.flags + "d"); } catch { re = null; }
-        if (re === null) {
-          ff++;
-        } else {
-          for (const t of r.tests ?? []) {
-            if (t.v8_deviation) continue;
-            if (JSON.stringify(execAnswer(re, r.flags, t.text, t.lastIndex)) === JSON.stringify(t.answer)) fr++; else fw++;
-          }
-        }
-      }
-      if (progress) {
-        const d = [fr, fw, ff, fa, fl].map((v, k) => v - before[k]);
-        process.stderr.write(`P\t${name}\t${index}\t${d.join("\t")}\t1\t0\n`);
-      }
-      continue;
-    }
-    const modes = [["u", "unicode", r.valid.unicode], ["", "legacy", r.valid.legacy]];
-    if ("unicode_sets" in r.valid) modes.push(["v", "unicode_sets", r.valid.unicode_sets]);
-    const before = [fr, fw, ff, fa, fl];
-    if (notAsked.has(`${name}\t${index}`)) {
-      fl += answersOf(name, r, modes);
-      if (progress) process.stderr.write(`P\t${name}\t${index}\t0\t0\t0\t0\t${fl - before[4]}\t1\t0\n`);
-      continue;
-    }
-    for (const [suffix, answer, valid] of modes) {
       let re = null;
-      try { re = new RegExp(r.pattern, r.flags + suffix); } catch { re = null; }
-      if (re === null) { if (valid) ff++; continue; }
-      if (!valid) { fa++; continue; }
-      for (const t of r.tests ?? []) {
-        if (t.v8_deviation || !(answer in t)) continue;
-        if (name === "captures.jsonl") {
-          const got = answers(r.pattern, r.flags + suffix, t.text);
-          for (const what of ["exec", "all", "sticky", "replace", "replaceAll", "split", "split3"]) {
-            if (what === "sticky" && t.text.length === 0) continue;
-            if (JSON.stringify(got[what]) === JSON.stringify(t[answer][what])) fr++; else fw++;
-          }
-          continue;
+      try { re = new RegExp(r.pattern, r.flags.includes("d") ? r.flags : r.flags + "d"); } catch { re = null; }
+      if (re === null) {
+        ff++;
+      } else {
+        for (const t of r.tests ?? []) {
+          if (t.v8_deviation) continue;
+          ask(() => JSON.stringify(execAnswer(re, r.flags, t.text, t.lastIndex)) === JSON.stringify(t.answer));
         }
-        re.lastIndex = 0;
-        if (re.test(t.text) === t[answer]) fr++; else fw++;
+      }
+    } else {
+      const modes = [["u", "unicode", r.valid.unicode], ["", "legacy", r.valid.legacy]];
+      if ("unicode_sets" in r.valid) modes.push(["v", "unicode_sets", r.valid.unicode_sets]);
+      for (const [suffix, answer, valid] of modes) {
+        let re = null;
+        try { re = new RegExp(r.pattern, r.flags + suffix); } catch { re = null; }
+        if (re === null) { if (valid) ff++; continue; }
+        if (!valid) { fa++; continue; }
+        for (const t of r.tests ?? []) {
+          if (t.v8_deviation || !(answer in t)) continue;
+          if (name === "captures.jsonl") {
+            for (const what of CAPTURES) {
+              if (what === "sticky" && t.text.length === 0) continue;
+              ask(() => JSON.stringify(captureAnswer(what, r.pattern, r.flags + suffix, t.text)) === JSON.stringify(t[answer][what]));
+            }
+            continue;
+          }
+          ask(() => {
+            re.lastIndex = 0;
+            return re.test(t.text) === t[answer];
+          });
+        }
       }
     }
-    if (progress) {
-      const d = [fr, fw, ff, fa, fl].map((v, k) => v - before[k]);
-      process.stderr.write(`P\t${name}\t${index}\t${d.join("\t")}\t1\t0\n`);
-    }
+    write(false);
+    if (limitMode) process.stderr.write("E\n");
   }
-  return { records, skipped, right: fr, wrong: fw, refused: ff, accepted: fa, limited: fl };
+  return { records, skipped, right: fr, wrong: fw, refused: ff, accepted: fa, limited: 0 };
 }
 
 if (only) {
