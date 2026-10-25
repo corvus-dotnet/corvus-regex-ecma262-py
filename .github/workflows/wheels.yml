@@ -10,8 +10,8 @@ on:
     inputs:
       tag:
         # A release's tag (pypi-publish.yml): its version is written into pyproject.toml, Cargo.toml, Cargo.lock and
-        # __version__, which hold 0.0.0, before the build (tools/release/stamp.ps1). Empty for CI, which builds the
-        # placeholder.
+        # __version__, which hold 0.0.0, before the build (tools/release/stamp.ps1). CI passes v99.98.97, so that the
+        # stamping runs in every job of every pull request, as a release runs it.
         type: string
         default: ''
 
