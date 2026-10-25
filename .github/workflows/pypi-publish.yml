@@ -1,10 +1,10 @@
 name: pypi-publish
-# Publishes corvus-regex-ecma262 to PyPI when a GitHub release is published: the wheels for every platform and the
-# sdist, built and tested by wheels.yml. The release's tag must be v<version> for the version in pyproject.toml; a
-# version already on PyPI publishes nothing, so re-running a release's jobs is safe. To release: bump the version (in
-# pyproject.toml, Cargo.toml and __version__; ci.yml checks they agree), push, and publish a release tagged v<version>.
-# A harness release (gh release create harness-<version>.<n> --latest=false), for a change to the benchmark harness
-# alone, publishes the harness image and nothing here.
+# Publishes corvus-regex-ecma262 to PyPI when a GitHub release tagged v<version> is published, which auto-release.yml
+# does after a merged pull request that changed the binding: the wheels for every platform and the sdist, built and
+# tested by wheels.yml. The version is the tag's: pyproject.toml, Cargo.toml, Cargo.lock and __version__ hold 0.0.0, and
+# wheels.yml writes the tag's version into them before it builds (tools/release/stamp.ps1). A version already on PyPI
+# publishes nothing, so re-running a release's jobs is safe. A harness release (harness-<version>.<n>), for a change to
+# the benchmark harness alone, publishes the harness image and nothing here.
 #
 # It authenticates with PyPI trusted publishing (OIDC): no token is stored. The project's trusted publisher on PyPI
 # names this repository, this workflow file and the environment "pypi", so keep those names. A trusted publisher can
@@ -35,16 +35,16 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - name: Check the tag names this version and whether PyPI has it
+      - name: Take the version from the tag and ask whether PyPI has it
         id: check
         env:
           TAG: ${{ github.event.release.tag_name }}
         run: |
-          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -n 1)
-          if [ "$TAG" != "v$version" ]; then
-            echo "::error::The release's tag is $TAG but pyproject.toml says $version (the tag must be v$version)."
+          if ! [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::The release's tag is $TAG, which is not v<major>.<minor>.<patch>."
             exit 1
           fi
+          version=${BASH_REMATCH[1]}
           echo "version=$version" >> "$GITHUB_OUTPUT"
           # PyPI answers 404 for a project or version it does not have.
           status=$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/corvus-regex-ecma262/$version/json")
@@ -61,6 +61,8 @@ jobs:
     needs: version
     if: needs.version.outputs.publish == 'true'
     uses: ./.github/workflows/wheels.yml
+    with:
+      tag: ${{ github.event.release.tag_name }}
 
   publish:
     name: Publish
