@@ -7,6 +7,13 @@ name: wheels
 # tested here.
 on:
   workflow_call:
+    inputs:
+      tag:
+        # A release's tag (pypi-publish.yml): its version is written into pyproject.toml, Cargo.toml, Cargo.lock and
+        # __version__, which hold 0.0.0, before the build (tools/release/stamp.ps1). Empty for CI, which builds the
+        # placeholder.
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -32,6 +39,12 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+      - name: Write the release's version
+        if: inputs.tag != ''
+        shell: pwsh
+        env:
+          TAG: ${{ inputs.tag }}
+        run: ./tools/release/stamp.ps1 -Tag $env:TAG
       - name: Build
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
@@ -98,6 +111,12 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+      - name: Write the release's version
+        if: inputs.tag != ''
+        shell: pwsh
+        env:
+          TAG: ${{ inputs.tag }}
+        run: ./tools/release/stamp.ps1 -Tag $env:TAG
       - name: Build
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:

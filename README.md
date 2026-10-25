@@ -110,6 +110,19 @@ measured nightly on one runner with the engines of every other source.
 - `tests/`: the tests; `tools/dataset.py`: the test-data runner (`python tools/dataset.py <data> wrong.tsv`).
 - `tools/bench`: the benchmark harness and the script the image runs; `Dockerfile`: the image the central page runs.
 
+## Releasing
+
+Every merged pull request releases what it changed, unless it is labelled `no_release`. `auto-release.yml` runs
+`tools/release/release.ps1` on the merge commit: when the binding changed since its last tag (`Cargo.toml`,
+`Cargo.lock`, `pyproject.toml`, `rust-toolchain.toml`, `src/` or `python/`), it makes a GitHub release tagged
+`v<version>` with the next patch version, and `pypi-publish.yml` publishes it: `wheels.yml` writes the version into
+`pyproject.toml`, `Cargo.toml`, `Cargo.lock` and `__version__` (which hold `0.0.0`; `tools/release/stamp.ps1`), builds
+and tests every wheel and the sdist, and they are uploaded to PyPI by trusted publishing. `harness-image.yml` publishes
+the harness image under the same tag. When only the harness changed (`Dockerfile`, `tools/bench/`,
+`tools/benchmarks/`), the release is `harness-<version>.<n>`, which publishes the image alone. A pull request that needs
+a minor or major version sets `nextVersion` in `.github/release.json` (a minor version is a breaking change). A pull
+request labelled `no_release` releases nothing, and its changes ship with the next release.
+
 ## Licence
 
 Apache-2.0. See [LICENSE](LICENSE).
