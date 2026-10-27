@@ -58,16 +58,17 @@ ecma.compile(r"\s*(;)\s*").split("a ; b;c")            # ['a', ';', 'b', ';', 'c
 
 | | |
 |---|---|
-| `compile(pattern, flags="", *, timeout=None)`, `Regex(...)` | Compiles a pattern as `new RegExp(pattern, flags)` does; raises `error` when it is not valid. `timeout` is the match timeout in seconds (0 for none; None for `default_timeout()`). |
+| `compile(pattern, flags="", *, timeout=None, edition="current", unicode_version=None)`, `Regex(...)` | Compiles a pattern as `new RegExp(pattern, flags)` does; raises `error` when it is not valid. `timeout` is the match timeout in seconds (0 for none; None for `default_timeout()`). `edition` and `unicode_version` are below. |
 | `set_default_timeout(seconds)`, `default_timeout()` | The timeout of every pattern compiled without one: None (no limit) unless set. |
-| `is_valid(pattern, flags="")` | Whether a pattern is valid, without compiling it. |
+| `is_valid(pattern, flags="", *, edition="current", unicode_version=None)` | Whether a pattern is valid, without compiling it. |
 | `Regex.test(string, pos=0, *, timeout=None)` | `RegExp.prototype.test` with `lastIndex` at `pos` (at `pos` alone with `y`). |
 | `Regex.search(string, pos=0, *, timeout=None)` | The first match at or after `pos`, as `exec` finds it: a `Match`, or `None`. |
 | `Regex.finditer(string)` | A global search as `matchAll` makes it: an iterator of `Match`. |
 | `Regex.replace(string, replacement)` | `String.prototype.replace`: the first match, or every match with `g`; the replacement is a template or a function of the `Match`. |
 | `Regex.replace_all(string, replacement)` | `String.prototype.replaceAll`: every match. |
 | `Regex.split(string, limit=None)` | `String.prototype.split`: a list of strings, `None` for a group that did not take part. |
-| `Regex.pattern`, `.flags`, `.timeout`, `.groups`, `.group_names` | What the pattern is. |
+| `Regex.pattern`, `.flags`, `.timeout`, `.edition`, `.unicode_version`, `.groups`, `.group_names` | What the pattern is. |
+| `UNICODE_VERSIONS`, `DEFAULT_UNICODE_VERSION`, `LATEST_UNICODE_VERSION` | The versions of Unicode the package carries, `(13, 17, 18)`, the default (17) and the latest (18). |
 
 A `Match` is read as an `re.Match` is: `group(*groups)`, `m[g]`, `groups(default)`, `groupdict(default)`, `start(g)`,
 `end(g)`, `span(g)` (a group that did not take part is `None`, at -1), `string` and `re`; a group is a number or a name.
@@ -95,6 +96,22 @@ UTF-8 raise a plain `ValueError`, before any of them is read: none is matched, n
 every pattern compiled after it `set_default_timeout(1.0)`. Every method that matches gives each of its matches the
 timeout; `test` and `search` take a `timeout=` of their own in its place. Without a timeout (the default) a match has
 no limit of time or of memory, so a program that matches a pattern or a text it did not write should set one.
+
+**The edition and the version of Unicode.** Two settings, each independent of the other, are settled when a pattern is
+compiled and cost a match nothing:
+
+- `edition="es2020"` reads the pattern with the grammar of ECMAScript 2020, which JSON Schema 2020-12 names. It refuses
+  what later editions added, and nothing else: the `d` and `v` flags (an `error` of kind `"flags"`), modifier groups
+  such as `(?i:...)`, a group name used by two groups, and a property name or value that is not in that edition's
+  tables, such as `\p{Script=Yezidi}` (each of kind `"pattern"`). A pattern it accepts has the same answers as in
+  today's grammar. `"current"`, the default, is today's grammar.
+- `unicode_version` is the version of Unicode whose tables the pattern is read with: the members of each `\p{...}`,
+  the characters of a group name, and case folding. It is None (the default: the version of the V8 the answers are
+  held to, 17 today), 13, 17, 18 or `"latest"` (18 today). `Regex.unicode_version` gives the version it resolved to.
+
+```python
+ecma.compile(r"^\p{L}+$", "u", edition="es2020", unicode_version=13, timeout=1.0)
+```
 
 **Threads.** A `Regex` is immutable and may be used from any number of threads; matching releases the GIL.
 
