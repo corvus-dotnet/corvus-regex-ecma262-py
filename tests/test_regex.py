@@ -234,6 +234,133 @@ def test_the_default_timeout():
         ecma.compile("a", timeout=-1)
 
 
+def test_the_defaults_are_todays_grammar_and_v8s_unicode():
+    re = ecma.compile("a")
+    assert re.edition == "current"
+    assert re.unicode_version == ecma.DEFAULT_UNICODE_VERSION == 17
+    assert ecma.LATEST_UNICODE_VERSION == 18
+    assert ecma.UNICODE_VERSIONS == (13, 17, 18)
+
+
+def test_a_version_is_resolved_when_the_pattern_is_compiled():
+    for asked, resolved in [(None, 17), (13, 13), (17, 17), (18, 18), ("latest", 18)]:
+        assert ecma.compile("a", unicode_version=asked).unicode_version == resolved
+    for bad in (12, 19, "18", "default", 17.0):
+        with pytest.raises(ValueError):
+            ecma.compile("a", unicode_version=bad)
+        with pytest.raises(ValueError):
+            ecma.is_valid("a", unicode_version=bad)
+    with pytest.raises(ValueError):
+        ecma.compile("a", edition="es2022")
+    with pytest.raises(ValueError):
+        ecma.is_valid("a", edition="ES2020")
+
+
+@pytest.mark.parametrize(
+    "pattern, version, valid",
+    [
+        (r"\p{Script=Vithkuqi}", 13, False),
+        (r"\p{Script=Vithkuqi}", None, True),
+        (r"\p{Script=Yezidi}", 13, True),
+        (r"\p{Script=Jurchen}", None, False),
+        (r"\p{scx=Jurc}", 18, True),
+        (r"\p{Script=Jurchen}", "latest", True),
+    ],
+)
+def test_each_version_has_its_own_scripts(pattern, version, valid):
+    assert ecma.is_valid(pattern, "u", unicode_version=version) is valid
+    if valid:
+        ecma.compile(pattern, "u", unicode_version=version)
+    else:
+        with pytest.raises(ecma.error) as e:
+            ecma.compile(pattern, "u", unicode_version=version)
+        assert e.value.kind == "pattern"
+
+
+def test_a_property_and_case_folding_are_the_versions():
+    letter = "\U00010597"
+    assert ecma.compile(r"^\p{Ll}$", "u").test(letter)
+    assert not ecma.compile(r"^\p{Ll}$", "u", unicode_version=13).test(letter)
+    assert ecma.compile("\U00010570", "iu").test(letter)
+    assert not ecma.compile("\U00010570", "iu", unicode_version=13).test(letter)
+    assert ecma.compile("\ua7c0", "i").test("\ua7c1")
+    assert not ecma.compile("\ua7c0", "i", unicode_version=13).test("\ua7c1")
+
+
+@pytest.mark.parametrize("flags, text", [("iu", "\U00010570\U00010597"), ("i", "\ua7c0\ua7c1")])
+@pytest.mark.parametrize("pattern", [r"(.)\1", r"(?<=\1(.))", r"(?:x|(.))+\1$"])
+def test_a_case_insensitive_backreference_folds_as_its_version_folds(flags, text, pattern):
+    twice = text[0] * 2
+    for version in (17, 18):
+        re = ecma.compile(pattern, flags, unicode_version=version)
+        assert re.test(text)
+        assert re.test(text.encode())
+        assert re.test(units(text))
+    re = ecma.compile(pattern, flags, unicode_version=13)
+    assert not re.test(text)
+    assert not re.test(text.encode())
+    assert not re.test(units(text))
+    assert re.test(twice)
+    assert re.search(twice) is not None
+    assert re.search(text) is None
+
+
+@pytest.mark.parametrize(
+    "pattern, flags",
+    [
+        ("(?i:a)", ""),
+        ("(?-i:a)", "i"),
+        ("(?s:.)", "u"),
+        ("(?<a>x)|(?<a>y)", ""),
+        ("(?<a>x)|(?<a>y)", "u"),
+        (r"\p{Script=Yezidi}", "u"),
+        (r"\p{sc=Vith}", "u"),
+        (r"\p{Script_Extensions=Toto}", "u"),
+    ],
+)
+def test_the_grammar_of_2020_refuses_what_later_editions_added(pattern, flags):
+    with pytest.raises(ecma.error) as e:
+        ecma.compile(pattern, flags, edition="es2020", unicode_version="latest")
+    assert e.value.kind == "pattern"
+    assert not ecma.is_valid(pattern, flags, edition="es2020", unicode_version="latest")
+    ecma.compile(pattern, flags, unicode_version="latest")
+
+
+@pytest.mark.parametrize(
+    "pattern, flags",
+    [
+        (r"\p{Script=Greek}", "u"),
+        (r"\p{L}\p{gc=Lu}\p{Lowercase}", "u"),
+        (r"\P{scx=Latn}", "iu"),
+        (r"\p{Script=Yezidi}", ""),
+        (r"(?<a>x)(?<b>y)\k<a>", "u"),
+        (r"(?<=a)(?<!b)", "s"),
+        (r"(?:i)", ""),
+    ],
+)
+def test_the_grammar_of_2020_accepts_what_it_had(pattern, flags):
+    re = ecma.compile(pattern, flags, edition="es2020", unicode_version=13)
+    assert re.edition == "es2020"
+    assert re.unicode_version == 13
+
+
+@pytest.mark.parametrize("flags", ["d", "v", "dv", "gv"])
+def test_the_grammar_of_2020_has_no_d_or_v_flag(flags):
+    with pytest.raises(ecma.error) as e:
+        ecma.compile("a", flags, edition="es2020")
+    assert e.value.kind == "flags"
+    assert not ecma.is_valid("a", flags, edition="es2020")
+    ecma.compile("a", flags)
+
+
+def test_the_settings_and_a_timeout_go_together():
+    re = ecma.compile(r"^(?:(a+)\1*)+$", "u", timeout=0.03, edition="es2020", unicode_version=13)
+    assert (re.timeout, re.edition, re.unicode_version) == (pytest.approx(0.03), "es2020", 13)
+    with pytest.raises(ecma.MatchLimitError):
+        re.test("a" * 60 + "b")
+    assert ecma.Regex("a", "u", edition="es2020").edition == "es2020"
+
+
 def units(s):
     """The UTF-16 code units of a str, lone surrogates and all, in the machine's byte order."""
     return array.array("H", s.encode("utf-16-le" if sys.byteorder == "little" else "utf-16-be", "surrogatepass"))

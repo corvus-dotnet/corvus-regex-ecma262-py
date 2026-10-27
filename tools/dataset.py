@@ -3,7 +3,7 @@
 judged by the data's own rule ("How a runner judges an engine" in its README) as the C library's runner judges it:
 
     python tools/dataset.py <data directory> <wrong-cases output file> [--files <filter>] [--workers N]
-                            [--compliance <file>]
+                            [--compliance <file>] [--edition current|es2020] [--unicode 13|17|18|latest]
 
 Each record is asked about under each grammar V8 found it valid in: the record's flags with u added (the unicode
 answers), the record's flags alone (the legacy answers) and, in the file that has them, the flags with v added (the
@@ -30,6 +30,10 @@ g or y, the lastIndex after are V8's; one answer over the text's code units as a
 the data's own, since lastIndex can fall between the halves of a character) and, when the text holds no lone surrogate
 and lastIndex is not between the halves of a pair, one over UTF-8 bytes with positions in bytes.
 
+--edition and --unicode compile every pattern with that edition and version of Unicode, for the data as its own scripts
+write it for them (edition.js apply and unicode.js apply in the data repository). Under es2020 a refusal of the d or v
+flag is a refusal of the pattern, as the data's overlay counts it.
+
 With --compliance <file>, the engine's compliance object is written to the file, as the benchmark page reads it
 (docs/implementing-a-source.md in corvus-regex-ecma262-benchmarks): the counts, this runner and the calls it makes in
 each encoding, and what it leaves out, which for this package is nothing.
@@ -50,6 +54,13 @@ import corvus_regex_ecma262 as ecma
 LIMIT = 2.0
 REPLACEMENT = "<$&|$1|$2|$10|$<a>|$$|$`|$'>"
 REPLACEMENT8 = REPLACEMENT.encode()
+
+# The edition and the version of Unicode every pattern is compiled with (--edition, --unicode).
+SETTINGS = {"edition": "current", "unicode_version": None}
+
+
+def use_settings(settings):
+    SETTINGS.update(settings)
 
 
 def lone(s: str) -> bool:
@@ -127,11 +138,13 @@ class Counts:
 
 def compile_or_why(pattern: str, flags: str):
     try:
-        return ecma.compile(pattern, flags), None, False
+        return ecma.compile(pattern, flags, **SETTINGS), None, False
     except ecma.error as e:
         kind = getattr(e, "kind", "pattern")
         if kind == "pattern":
             return None, f"PARSE: {e}", False
+        if kind == "flags" and SETTINGS["edition"] == "es2020":
+            return None, f"FLAGS: {e}", False
         if kind == "too_large":
             return None, f"TOO-LARGE: {e}", False
         return None, f"ERROR: {e}", True
@@ -479,7 +492,12 @@ def main():
     ap.add_argument("--files", default="*.jsonl")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--compliance")
+    ap.add_argument("--edition", choices=["current", "es2020"], default="current")
+    ap.add_argument("--unicode", choices=["13", "17", "18", "latest"])
     args = ap.parse_args()
+    version = None if args.unicode is None else args.unicode if args.unicode == "latest" else int(args.unicode)
+    settings = {"edition": args.edition, "unicode_version": version}
+    use_settings(settings)
     files = sorted(f for f in os.listdir(args.data) if f.endswith(".jsonl") and fnmatch.fnmatch(f, args.files))
     # The exec calls of test262, in a directory of their own: with the default filter, or one that names them.
     if (args.files == "*.jsonl" or args.files.startswith("exec")) and os.path.isfile(os.path.join(args.data, EXEC)):
@@ -487,7 +505,7 @@ def main():
     total, wrong = Counts(), []
     records = skipped = 0
     start = time.monotonic()
-    with Pool(args.workers) as pool:
+    with Pool(args.workers, initializer=use_settings, initargs=(settings,)) as pool:
         for name in files:
             with open(os.path.join(args.data, name), encoding="utf-8", errors="surrogatepass") as f:
                 lines = f.read().splitlines()

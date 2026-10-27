@@ -2,7 +2,8 @@ name: wheels
 # Builds and tests the corvus-regex-ecma262 wheels (abi3, one for every Python from 3.10, on native runners for each
 # platform) and its sdist, and uploads them as artifacts named wheel-* and sdist. Each wheel is tested on the oldest
 # and the newest Python; on Linux x86_64 and Windows x64 the ECMA-262 test data (pinned to a commit) runs through it
-# too, and must give no wrong answer, refusal of a valid pattern, acceptance of an invalid one or match at its limit.
+# too, and must give no wrong answer, refusal of a valid pattern, acceptance of an invalid one or match at its limit;
+# on Linux x86_64 also for Unicode 13 and 18 and for the grammar of ECMAScript 2020, as the data's overlays write it.
 # Called by ci.yml (every change) and pypi-publish.yml (a release), so a release uploads exactly what was built and
 # tested here.
 on:
@@ -75,7 +76,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: corvus-dotnet/ecma262-regex-test-data
-          ref: cff0860b7ebc5eb9c801eb9f8cec9d5398688ff2
+          ref: 1b4c4353c4fa3fc3e318db32ef0261391519b9a5
           path: ecma262-regex-test-data
           persist-credentials: false
       - name: Run the ECMA-262 test data
@@ -84,12 +85,41 @@ jobs:
         run: |
           py=.venv-3.14/bin/python; [ -x "$py" ] || py=.venv-3.14/Scripts/python.exe
           "$py" tools/dataset.py ecma262-regex-test-data/data wrong-cases.tsv
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: ${{ matrix.dataset && runner.os == 'Linux' }}
+        with:
+          node-version: '24.22.1'
+      - name: Run the ECMA-262 test data for other versions of Unicode and for ECMAScript 2020
+        # The data as its own scripts write it for Unicode 13 and 18 (unicode.js apply) and for the grammar of
+        # ECMAScript 2020 (edition.js apply), each judged with the package set to match.
+        if: ${{ matrix.dataset && runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          py=.venv-3.14/bin/python
+          data=ecma262-regex-test-data
+          failed=()
+          run() {
+            name=$1; shift
+            out="$RUNNER_TEMP/$name"
+            case "$1" in
+              unicode.js) node "$data/unicode.js" apply "$2" "$out" "$data/data" ;;
+              edition.js) node "$data/edition.js" apply "$out" "$2" "$data/data" ;;
+            esac
+            shift 2
+            "$py" tools/dataset.py "$out" "wrong-cases-$name.tsv" "$@" || failed+=("$name")
+          }
+          run unicode-13 unicode.js 13.0 --unicode 13
+          run unicode-18 unicode.js 18.0 --unicode 18
+          # An empty version is the data's own Unicode.
+          run es2020 edition.js "" --edition es2020
+          run es2020-unicode-13 edition.js 13.0 --edition es2020 --unicode 13
+          if [ ${#failed[@]} -gt 0 ]; then echo "::error::Wrong: ${failed[*]}"; exit 1; fi
       - name: Keep the wrong cases
         if: ${{ failure() && matrix.dataset }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wrong-cases-${{ matrix.os }}
-          path: wrong-cases.tsv
+          path: wrong-cases*.tsv
       - name: Test (musl)
         if: ${{ matrix.container }}
         run: |

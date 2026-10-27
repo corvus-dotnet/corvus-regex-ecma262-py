@@ -213,6 +213,43 @@ fn limit_of(timeout: Option<f64>) -> PyResult<Option<Duration>> {
     }
 }
 
+/// The edition a Python value names: "current" (the default, today's grammar) or "es2020".
+fn edition_of(edition: &str) -> PyResult<ecma::Edition> {
+    match edition {
+        "current" => Ok(ecma::Edition::Current),
+        "es2020" => Ok(ecma::Edition::Es2020),
+        _ => Err(PyValueError::new_err("edition must be \"current\" or \"es2020\"")),
+    }
+}
+
+fn edition_name(edition: ecma::Edition) -> &'static str {
+    match edition {
+        ecma::Edition::Es2020 => "es2020",
+        _ => "current",
+    }
+}
+
+/// The version of Unicode a Python value names: None (V8's, 17 today), 13, 17, 18 or "latest" (18 today).
+fn unicode_version_of(version: Option<&Bound<'_, PyAny>>) -> PyResult<ecma::UnicodeVersion> {
+    let Some(v) = version else { return Ok(ecma::UnicodeVersion::Default) };
+    if v.is_none() {
+        return Ok(ecma::UnicodeVersion::Default);
+    }
+    if let Ok(s) = v.cast::<PyString>() {
+        if s.to_str()? == "latest" {
+            return Ok(ecma::UnicodeVersion::Latest);
+        }
+    } else if let Ok(n) = v.extract::<i64>() {
+        match n {
+            13 => return Ok(ecma::UnicodeVersion::V13),
+            17 => return Ok(ecma::UnicodeVersion::V17),
+            18 => return Ok(ecma::UnicodeVersion::V18),
+            _ => {}
+        }
+    }
+    Err(PyValueError::new_err("unicode_version must be None, 13, 17, 18 or \"latest\""))
+}
+
 /// A Python string from UTF-16 that may hold lone surrogates.
 fn str_of_units<'py>(py: Python<'py>, units: &[u16]) -> PyResult<Bound<'py, PyAny>> {
     if let Ok(s) = String::from_utf16(units) {
@@ -403,8 +440,15 @@ impl Spans {
 #[pymethods]
 impl Regex {
     #[new]
-    #[pyo3(signature = (pattern, flags = "", *, timeout = None))]
-    fn new(py: Python<'_>, pattern: &Bound<'_, PyAny>, flags: &str, timeout: Option<f64>) -> PyResult<Regex> {
+    #[pyo3(signature = (pattern, flags = "", *, timeout = None, edition = "current", unicode_version = None))]
+    fn new(
+        py: Python<'_>,
+        pattern: &Bound<'_, PyAny>,
+        flags: &str,
+        timeout: Option<f64>,
+        edition: &str,
+        unicode_version: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Regex> {
         let pattern: String = if let Ok(s) = pattern.cast::<PyString>() {
             match s.to_str() {
                 Ok(p) => p.to_owned(),
@@ -414,15 +458,13 @@ impl Regex {
         } else {
             return Err(PyTypeError::new_err("the pattern must be a str"));
         };
-        let inner = match limit_of(timeout)? {
-            // None: the default timeout (see set_default_timeout).
-            None => py.detach(|| ecma::Regex::new(&pattern, flags)),
-            Some(t) => {
-                let flags = ecma::Flags::parse(flags).map_err(|e| compile_error(py, e))?;
-                py.detach(|| ecma::Regex::with_timeout(&pattern, flags, Some(t)))
-            }
+        let mut builder = ecma::RegexBuilder::new(&pattern);
+        builder.flags(flags).edition(edition_of(edition)?).unicode_version(unicode_version_of(unicode_version)?);
+        // None: the default timeout (see set_default_timeout).
+        if let Some(t) = limit_of(timeout)? {
+            builder.match_timeout(Some(t));
         }
-        .map_err(|e| compile_error(py, e))?;
+        let inner = py.detach(|| builder.build()).map_err(|e| compile_error(py, e))?;
         let f = inner.flags();
         let flag_text = format!("{f}");
         let names = inner.group_names().map(str::to_owned).collect();
@@ -434,11 +476,19 @@ impl Regex {
         })
     }
 
-    /// Whether a pattern is valid with the flags, without compiling it.
+    /// Whether a pattern is valid with the flags, in the edition and the version of Unicode, without compiling it.
     #[staticmethod]
-    #[pyo3(signature = (pattern, flags = ""))]
-    fn is_valid(pattern: &str, flags: &str) -> bool {
-        ecma::Regex::is_valid(pattern, flags)
+    #[pyo3(signature = (pattern, flags = "", *, edition = "current", unicode_version = None))]
+    fn is_valid(
+        pattern: &str,
+        flags: &str,
+        edition: &str,
+        unicode_version: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<bool> {
+        let edition = edition_of(edition)?;
+        let unicode_version = unicode_version_of(unicode_version)?;
+        Ok(ecma::Flags::parse(flags)
+            .is_ok_and(|flags| ecma::Regex::is_valid_with(pattern, flags, edition, unicode_version)))
     }
 
     /// The pattern as it was given.
@@ -457,6 +507,18 @@ impl Regex {
     #[getter]
     fn timeout(&self) -> Option<f64> {
         seconds_of(self.inner.match_timeout())
+    }
+
+    /// The edition whose grammar the pattern was read with: "current" or "es2020".
+    #[getter]
+    fn edition(&self) -> &'static str {
+        edition_name(self.inner.edition())
+    }
+
+    /// The version of Unicode whose tables the pattern was read with, resolved: 13, 17 or 18.
+    #[getter]
+    fn unicode_version(&self) -> u32 {
+        self.inner.unicode_version().major()
     }
 
     /// The number of capturing groups.
@@ -1006,5 +1068,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("MatchLimitError", m.py().get_type::<MatchLimitError>())?;
     m.add("MAX_PATTERN_LENGTH", ecma::MAX_PATTERN_LENGTH)?;
     m.add("MAX_NESTING", ecma::MAX_NESTING)?;
+    m.add("UNICODE_VERSIONS", (13u32, 17u32, 18u32))?;
+    m.add("DEFAULT_UNICODE_VERSION", ecma::UnicodeVersion::Default.major())?;
+    m.add("LATEST_UNICODE_VERSION", ecma::UnicodeVersion::Latest.major())?;
     Ok(())
 }

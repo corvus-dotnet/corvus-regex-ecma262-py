@@ -8,6 +8,9 @@ AnyStr = TypeVar("AnyStr", str, bytes, array)
 
 MAX_PATTERN_LENGTH: int
 MAX_NESTING: int
+UNICODE_VERSIONS: tuple[int, ...]
+DEFAULT_UNICODE_VERSION: int
+LATEST_UNICODE_VERSION: int
 
 class error(ValueError):
     """A pattern or its flags are not valid, or the pattern is over a limit of size."""
@@ -22,15 +25,29 @@ def set_default_timeout(seconds: float | None) -> None: ...
 def default_timeout() -> float | None: ...
 
 class Regex:
-    def __init__(self, pattern: str, flags: str = "", *, timeout: float | None = None) -> None: ...
+    def __init__(
+        self,
+        pattern: str,
+        flags: str = "",
+        *,
+        timeout: float | None = None,
+        edition: str = "current",
+        unicode_version: int | str | None = None,
+    ) -> None: ...
     @staticmethod
-    def is_valid(pattern: str, flags: str = "") -> bool: ...
+    def is_valid(
+        pattern: str, flags: str = "", *, edition: str = "current", unicode_version: int | str | None = None
+    ) -> bool: ...
     @property
     def pattern(self) -> str: ...
     @property
     def flags(self) -> str: ...
     @property
     def timeout(self) -> float | None: ...
+    @property
+    def edition(self) -> str: ...
+    @property
+    def unicode_version(self) -> int: ...
     @property
     def groups(self) -> int: ...
     @property

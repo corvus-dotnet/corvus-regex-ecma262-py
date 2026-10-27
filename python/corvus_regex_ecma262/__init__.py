@@ -16,6 +16,9 @@ position between the halves of a character can be named). Without the u or v fla
 half of a character beyond the Basic Multilingual Plane: its text then holds that half as a lone surrogate, as a
 JavaScript string would, and its start and end are given as the whole character's.
 
+A pattern can be read with the grammar of ECMAScript 2020 (``edition="es2020"``), and with the tables of another
+version of Unicode (``unicode_version=13``, 17, 18 or ``"latest"``), each independent of the other.
+
 A pattern has a match timeout, as a ``Regex`` of .NET has: ``compile(pattern, flags, timeout=1.0)``, or for every
 pattern ``set_default_timeout(1.0)``. Every method that matches (``test``, ``search``, ``finditer``, ``replace``,
 ``split``) gives each of its matches the timeout, and a match that reaches it raises ``MatchLimitError``.
@@ -24,8 +27,11 @@ pattern ``set_default_timeout(1.0)``. Every method that matches (``test``, ``sea
 from __future__ import annotations
 
 from ._native import (
+    DEFAULT_UNICODE_VERSION,
+    LATEST_UNICODE_VERSION,
     MAX_NESTING,
     MAX_PATTERN_LENGTH,
+    UNICODE_VERSIONS,
     Match,
     MatchIterator,
     MatchLimitError,
@@ -38,8 +44,11 @@ from ._native import (
 __version__ = "0.0.0"
 
 __all__ = [
+    "DEFAULT_UNICODE_VERSION",
+    "LATEST_UNICODE_VERSION",
     "MAX_NESTING",
     "MAX_PATTERN_LENGTH",
+    "UNICODE_VERSIONS",
     "Match",
     "MatchIterator",
     "MatchLimitError",
@@ -52,17 +61,35 @@ __all__ = [
 ]
 
 
-def compile(pattern: str, flags: str = "", *, timeout: float | None = None) -> Regex:
+def compile(
+    pattern: str,
+    flags: str = "",
+    *,
+    timeout: float | None = None,
+    edition: str = "current",
+    unicode_version: int | str | None = None,
+) -> Regex:
     """Compiles a pattern with the flags ``new RegExp(pattern, flags)`` takes, any of dgimsuvy. Raises ``error`` when
     the pattern or the flags are not valid, or the pattern is over a limit of size.
 
     ``timeout`` is the time in seconds each match may take before it is abandoned with ``MatchLimitError`` (0 for no
     limit); None takes ``default_timeout()``, which is no limit unless ``set_default_timeout`` set one. A timeout also
     caps the backtracking memory of a match. Without one a match has no limit of time or of memory, so give a pattern
-    or a text from outside one."""
-    return Regex(pattern, flags, timeout=timeout)
+    or a text from outside one.
+
+    ``edition`` is the grammar the pattern is read with: "current" (today's, the default) or "es2020", the grammar of
+    ECMAScript 2020, which JSON Schema 2020-12 names. It refuses what later editions added, and nothing else: the d and
+    v flags, modifier groups such as ``(?i:...)``, a group name used by two groups, and a property name or value that
+    is not in that edition's tables.
+
+    ``unicode_version`` is the version of Unicode whose tables the pattern is read with: None (the default, V8's,
+    ``DEFAULT_UNICODE_VERSION``), 13, 17, 18 or "latest" (``LATEST_UNICODE_VERSION``). It is independent of the
+    edition. Both are settled when the pattern is compiled, and cost a match nothing."""
+    return Regex(pattern, flags, timeout=timeout, edition=edition, unicode_version=unicode_version)
 
 
-def is_valid(pattern: str, flags: str = "") -> bool:
-    """Whether a pattern is valid with the flags, without compiling it."""
-    return Regex.is_valid(pattern, flags)
+def is_valid(
+    pattern: str, flags: str = "", *, edition: str = "current", unicode_version: int | str | None = None
+) -> bool:
+    """Whether a pattern is valid with the flags, in the edition and the version of Unicode, without compiling it."""
+    return Regex.is_valid(pattern, flags, edition=edition, unicode_version=unicode_version)
