@@ -124,6 +124,20 @@ assert not ecma.is_valid(r"\p{Script=Vithkuqi}", "u", unicode_version=13)
 assert ecma.UNICODE_VERSIONS == (13, 17, 18)
 ```
 
+## Differences from Python's re
+
+- The grammar is ECMA-262's: a group is named `(?<name>...)`, not `(?P<name>...)`, and a backreference to it is
+  `\k<name>`. The flags are a string as `RegExp` takes them, and `(?i:...)` groups set them inside a pattern; there
+  is no `(?i)` prefix for the whole pattern, no `\A` or `\Z`, and no conditionals.
+- `\d` is `[0-9]` and `\w` the 63 ASCII word characters, where `re` makes them Unicode in a `str` pattern; `\s` is
+  ECMAScript's white space and line terminators, and `.` excludes LF, CR, U+2028 and U+2029.
+- A replacement template writes a group as `$1` or `$<name>`, not `\1` or `\g<name>`, and `$&`, `` $` `` and `$'` are
+  the match and the text before and after it.
+- `replace` replaces every match only with the `g` flag (or `replace_all`), where `re.sub` replaces every match unless
+  given a count.
+- `re` has no limit on a match's time. Here a pattern without a backreference is matched in time linear in the text,
+  and a pattern from outside should be given a `timeout`, which bounds every match.
+
 ## Where next
 
 - [The API reference](api.md), generated from the package's typed stubs.
