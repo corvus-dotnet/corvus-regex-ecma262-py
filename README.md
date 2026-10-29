@@ -56,19 +56,8 @@ ecma.compile(r"\s*(;)\s*").split("a ; b;c")            # ['a', ';', 'b', ';', 'c
 
 ## The API
 
-| | |
-|---|---|
-| `compile(pattern, flags="", *, timeout=None, edition="current", unicode_version=None)`, `Regex(...)` | Compiles a pattern as `new RegExp(pattern, flags)` does; raises `error` when it is not valid. `timeout` is the match timeout in seconds (0 for none; None for `default_timeout()`). `edition` and `unicode_version` are below. |
-| `set_default_timeout(seconds)`, `default_timeout()` | The timeout of every pattern compiled without one: None (no limit) unless set. |
-| `is_valid(pattern, flags="", *, edition="current", unicode_version=None)` | Whether a pattern is valid, without compiling it. |
-| `Regex.test(string, pos=0, *, timeout=None)` | `RegExp.prototype.test` with `lastIndex` at `pos` (at `pos` alone with `y`). |
-| `Regex.search(string, pos=0, *, timeout=None)` | The first match at or after `pos`, as `exec` finds it: a `Match`, or `None`. |
-| `Regex.finditer(string)` | A global search as `matchAll` makes it: an iterator of `Match`. |
-| `Regex.replace(string, replacement)` | `String.prototype.replace`: the first match, or every match with `g`; the replacement is a template or a function of the `Match`. |
-| `Regex.replace_all(string, replacement)` | `String.prototype.replaceAll`: every match. |
-| `Regex.split(string, limit=None)` | `String.prototype.split`: a list of strings, `None` for a group that did not take part. |
-| `Regex.pattern`, `.flags`, `.timeout`, `.edition`, `.unicode_version`, `.groups`, `.group_names` | What the pattern is. |
-| `UNICODE_VERSIONS`, `DEFAULT_UNICODE_VERSION`, `LATEST_UNICODE_VERSION` | The versions of Unicode the package carries, `(13, 17, 18)`, the default (17) and the latest (18). |
+[The API reference](docs/api.md) lists every name with its signature, generated from the package's typed stubs.
+[Getting started](docs/getting-started.md) walks through them, and CI runs its code.
 
 A `Match` is read as an `re.Match` is: `group(*groups)`, `m[g]`, `groups(default)`, `groupdict(default)`, `start(g)`,
 `end(g)`, `span(g)` (a group that did not take part is `None`, at -1), `string` and `re`; a group is a number or a name.

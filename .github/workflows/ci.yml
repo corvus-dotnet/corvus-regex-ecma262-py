@@ -25,6 +25,9 @@ jobs:
         run: |
           cargo fmt --check
           cargo clippy -j 4 --locked --all-targets -- -D warnings
+      - name: The API reference is current
+        # docs/api.md, which the documentation site publishes, is what the typed stubs make (tools/docs/gen-api.py).
+        run: python3 tools/docs/gen-api.py --check
       - name: The versions agree
         # pyproject.toml, Cargo.toml and __version__ name one version.
         run: |
