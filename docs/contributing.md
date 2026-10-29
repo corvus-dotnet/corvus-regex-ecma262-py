@@ -101,12 +101,14 @@ image each night beside every other engine; a run on another machine is comparab
 ## 7. Releases
 
 Every pull request merged into main releases what it changed, unless it is labelled `no_release`. `auto-release.yml`
-runs `tools/release/release.ps1` on the merge: when the package changed since its last tag (`Cargo.toml`,
-`Cargo.lock`, `pyproject.toml`, `rust-toolchain.toml`, `src/`, `python/`, or a published document), it makes a GitHub
-release tagged `v<version>` with the next patch version, and `pypi-publish.yml` builds, tests and uploads every wheel
-and the sdist to PyPI by trusted publishing. A change to the benchmark harness alone is a harness release, which
-publishes the harness image. A pull request that needs a minor or major version sets `nextVersion` in
-`.github/release.json`; a minor version is a breaking change.
+runs `tools/release/release.ps1` on the merge: when the package changed since its last tag (`Cargo.toml`, `Cargo.lock`,
+`pyproject.toml`, `rust-toolchain.toml`, `src/`, `python/`), it makes a GitHub release tagged `v<version>` with the next
+patch version, and `pypi-publish.yml` builds, tests and uploads every wheel and the sdist to PyPI by trusted publishing.
+A change to the benchmark harness alone is a harness release, which publishes the harness image. A pull request that
+needs a minor or major version sets `nextVersion` in `.github/release.json`; a minor version is a breaking change. The
+documentation site takes the published documents (the getting-started page, the API reference, the design document and
+this guide) from `main`, and they describe the latest release: a change to them alone is merged with `no_release`, and a
+change to the API carries its documents, which its release brings into step.
 
 `main` is protected by a ruleset: changes arrive by pull request, and the `CI gate` and `Harness image` checks must be
 green on the branch as it will merge.
