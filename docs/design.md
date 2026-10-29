@@ -23,8 +23,10 @@ ECMA-262's algorithm differs from `re`'s, the method has the `RegExp` name: `tes
 
 **Flags.** The flags are ECMA-262's, as a string (`"gu"`), and nothing else.
 
-**Edition and Unicode version.** `edition` (`"current"`, or `"es2020"`, the grammar JSON Schema 2020-12 names) and
-`unicode_version` (13, 17, 18, `"latest"`, or None for V8's), independent of each other and of the flags. Both are
+**Edition and Unicode version.** By default a pattern is read with today's grammar (`edition="current"`, ECMAScript
+2025) and V8's version of Unicode (`unicode_version=None`, 17 today). Either is overridden when the pattern is
+compiled, independently of the other and of the flags: `"es2020"` is the grammar JSON Schema 2020-12 names, and
+`unicode_version` is 13, 17, 18 or `"latest"`. Both are
 resolved when the pattern is compiled, so a match costs the same whatever they are.
 
 **Errors.** A pattern that does not compile raises `error`, a `ValueError`, whose `kind` is `"pattern"`, `"flags"` or
