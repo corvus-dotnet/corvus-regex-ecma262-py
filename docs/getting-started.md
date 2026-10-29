@@ -1,10 +1,24 @@
 # Getting started with Python
 
-`corvus-regex-ecma262` is the Rust engine as a typed Python package. Its patterns have the grammar and the answers of
-JavaScript's `RegExp`, held to V8's answers on the ECMA-262 test data, over `str`, `bytes` (UTF-8) and arrays of
-UTF-16 code units.
+## Introduction
 
-## Install
+`corvus-regex-ecma262` is a typed Python package whose patterns answer as ECMAScript does. Where Python's `re` has its
+own grammar and its own meaning for `\d`, `\w`, `\s`, `.`, case folding and Unicode properties, this package has
+ECMA-262's, so a pattern written for JavaScript, or taken from a JSON Schema, matches the same texts here as it does
+there. It is the corvus-regex-ecma262 Rust crate, held to V8's answers on the ECMA-262 test data, and a `Match` reads
+as an `re.Match` does.
+
+This guide covers:
+
+- **Setup**: installing the wheel.
+- **Patterns and flags**: the flags are ECMA-262's letters, and what each one does.
+- **The edition and the version of Unicode**: the grammar of ECMAScript 2020, and the Unicode tables a pattern reads.
+- **Matching**: `test`, `search`, `finditer`, `replace` and `split`, as `RegExp` and `String.prototype` define them.
+- **Timeouts**: the limit of time and of memory a match may take.
+- **UTF-8 and UTF-16**: `str`, `bytes` of UTF-8 and arrays of UTF-16 code units, each with its own positions.
+- **Differences from re**: what to expect when the two meet.
+
+## Setup
 
 ```
 pip install corvus-regex-ecma262
@@ -12,17 +26,60 @@ pip install corvus-regex-ecma262
 
 There are wheels for Linux (glibc and musl), macOS and Windows, on x64 and arm64, for every Python from 3.10.
 
-## Compile a pattern
+```python
+import corvus_regex_ecma262 as ecma
+```
 
-`compile` takes a pattern and its flags as `new RegExp(pattern, flags)` takes them: `d`, `g`, `i`, `m`, `s`, `u`, `v`
-and `y`. Without `u` or `v` a pattern is read by the Annex B grammar and matched by UTF-16 code unit, as ECMA-262 reads
-it; with them, by code point. A pattern that is not valid raises `error`, a `ValueError`, whose `kind` says why.
+## Patterns and flags
+
+A pattern is written as it would be in JavaScript, and the flags are the letters `RegExp` takes, as a string:
+
+| Flag | Meaning |
+|---|---|
+| `d` | Accepted for completeness; indices are always kept. |
+| `g` | `replace` replaces every match; without it, the first, as `String.prototype.replace` does. |
+| `i` | Canonicalize of the mode in force: simple case folding with `u` or `v`, `toUpperCase` without. Never the locale. |
+| `m` | `^` and `$` at line terminators. |
+| `s` | The dot matches line terminators. |
+| `u` | The `u` flag grammar; matched by code point. |
+| `v` | Set notation and properties of strings; matched by code point. `u` and `v` together is an error, as in ECMA-262. |
+| `y` | A match only at the start position. |
 
 ```python
 import corvus_regex_ecma262 as ecma
 
-date = ecma.compile(r"(?<year>\d{4})-(?<month>\d{2})", "gu")
-assert date.groups == 2 and date.group_names == ["year", "month"]
+a = ecma.compile(r"\p{Script=Greek}+", "u")
+b = ecma.compile(r"[[a-z]--[aeiou]]+", "v")
+c = ecma.compile(r"^(?<year>\d{4})-(?<month>\d{2})$", "u")
+
+assert a.test("αβγ")
+assert b.test("rhythm")
+assert c.group_names == ["year", "month"]
+```
+
+With no flag the pattern is read with the Annex B grammar and matched by UTF-16 code unit, which is what ECMA-262 does
+with no flag. JSON Schema's reading, the `u` flag first and Annex B when that refuses, is two compiles, each with the
+match timeout, so no default timeout is needed:
+
+```python
+import corvus_regex_ecma262 as ecma
+
+def schema_pattern(pattern):
+    try:
+        return ecma.compile(pattern, "u", timeout=1.0)
+    except ecma.error:
+        return ecma.compile(pattern, "", timeout=1.0)
+
+assert schema_pattern(r"^\p{L}+$").flags == "u"
+assert schema_pattern(r"\-").flags == ""  # an identity escape, which only Annex B allows
+```
+
+A pattern that is not valid raises `error`, a `ValueError` whose message says why and whose `kind` is `"pattern"`;
+invalid flags are `"flags"`. Every pattern has deterministic limits of size (`MAX_PATTERN_LENGTH`, `MAX_NESTING`), and
+`"too_large"` says when one is passed.
+
+```python
+import corvus_regex_ecma262 as ecma
 
 try:
     ecma.compile("a{2,1}", "u")
@@ -34,9 +91,34 @@ else:
 assert not ecma.is_valid("a", "uv")
 ```
 
-## Match
+## The edition and the version of Unicode
 
-A `Match` reads as an `re.Match` does. Over a `str` positions are code points, as Python indexes it.
+JSON Schema 2020-12 names the grammar of ECMAScript 2020. `edition="es2020"` refuses what later editions added, and
+nothing else: the `d` and `v` flags, modifier groups such as `(?i:...)`, a group name used by two groups, and a
+property name or value that is not in the 2020 tables (such as `\p{Script=Yezidi}`). A pattern it accepts has the same
+answers as in today's grammar.
+
+The version of Unicode is chosen apart from the edition: `unicode_version` is 13, 17, 18, `"latest"` (18 today) or
+None, the version of the V8 the answers are held to (17 today). It decides the members of each `\p{...}`, the
+characters of a group name and the case folding of the `i` flag. `Regex.unicode_version` reports the version a pattern
+was compiled with. Both are read when the pattern is compiled, so a match costs the same whichever is chosen.
+
+```python
+import corvus_regex_ecma262 as ecma
+
+# ECMAScript 2020 as its edition was published, with the Unicode of its year.
+greek = ecma.compile(r"^\p{Script=Greek}+$", "u", timeout=1.0, edition="es2020", unicode_version=13)
+assert greek.test("αβγ") and greek.unicode_version == 13
+
+# Vithkuqi is in Unicode 14 and later, so not in Unicode 13.
+assert not ecma.is_valid(r"\p{Script=Vithkuqi}", "u", unicode_version=13)
+assert ecma.UNICODE_VERSIONS == (13, 17, 18)
+```
+
+## Matching
+
+The methods are those of a `RegExp`, with the position as an argument where JavaScript keeps `lastIndex`. A `Match`
+reads as an `re.Match` does:
 
 ```python
 import corvus_regex_ecma262 as ecma
@@ -45,28 +127,56 @@ date = ecma.compile(r"(?<year>\d{4})-(?<month>\d{2})", "gu")
 text = "due 2026-10, then 2027-01"
 
 assert date.test(text)
-
 m = date.search(text)
 assert m.group() == "2026-10" and m.span() == (4, 11)
-assert m["year"] == "2026" and m.groupdict() == {"year": "2026", "month": "10"}
+assert m["year"] == "2026" and m[2] == "10" and m.groupdict() == {"year": "2026", "month": "10"}
 
 # Every match of a global search, as matchAll makes it.
 assert [m.group() for m in date.finditer(text)] == ["2026-10", "2027-01"]
 
-# replace replaces every match with the g flag, and the first without it, with every $ form of ECMA-262;
-# a function may give each replacement.
+# replace replaces every match with the g flag, and the first without it, with every $ form of ECMA-262, or a function.
 assert date.replace(text, "$<month>/$1") == "due 10/2026, then 01/2027"
-assert date.replace("2026-10", lambda m: m["month"]) == "10"
+assert date.replace(text, lambda m: m["year"]) == "due 2026, then 2027"
 
-# split splices in what the groups captured; a group that did not take part is None.
+# split puts what the groups captured between the pieces; a group that did not take part is None.
 assert ecma.compile(r"\s*(;)\s*").split("a ; b;c") == ["a", ";", "b", ";", "c"]
 ```
 
+`search(string, pos)` is `exec` with `lastIndex` set to `pos`, and `y` anchors it there. `test` makes no `Match`, and
+`finditer` makes each match as it is read. A `Regex` is immutable, and safe to share between threads; the matching
+runs without the GIL.
+
+## Timeouts
+
+A match has no limit by default. A pattern compiled with `timeout=` (in seconds) abandons a match that reaches it, or
+that reaches the cap on backtracking memory the timeout brings, with `MatchLimitError`, whatever the pattern:
+
+```python
+import corvus_regex_ecma262 as ecma
+
+slow = ecma.compile(r"^(?:(a+)\1*)+$", timeout=0.1)
+assert slow.timeout == 0.1
+try:
+    slow.test("a" * 60 + "b")
+except ecma.MatchLimitError:
+    pass
+else:
+    raise AssertionError("the match did not stop at its timeout")
+```
+
+A pattern compiled without a timeout takes `default_timeout()`, which is None (no limit) unless `set_default_timeout`
+sets it. A program that matches patterns or texts from outside should set one, for example with
+`ecma.set_default_timeout(1.0)` when it starts. `test` and `search` take a `timeout=` of their own for one match.
+
+A pattern without a backreference is matched in time linear in the text, and no pattern can overflow the stack, so the
+timeout is what bounds the others.
+
 ## UTF-8 and UTF-16
 
-Every method takes `bytes` of UTF-8, with positions in bytes, and an `array.array('H')` of UTF-16 code units, with
-positions in code units, lone surrogates and all. `bytes` that are not UTF-8 raise `ValueError` before any of them is
-read: none is matched, nor read as U+FFFD.
+Every method takes a `str`, with positions in code points as Python indexes it; `bytes` of UTF-8, with positions in
+bytes; and an `array.array('H')` of UTF-16 code units, lone surrogates and all, with positions in code units. `bytes`
+are matched as they are, with no transcoding, and are checked before they are read: `bytes` that are not UTF-8 raise
+`ValueError`, and are never matched or read as U+FFFD.
 
 ```python
 from array import array
@@ -87,59 +197,27 @@ else:
     raise AssertionError("bytes that are not UTF-8 were matched")
 ```
 
-## Patterns and texts from outside
+Under the `u` and `v` flags a character is a code point in every encoding, so a class, a dot or a quantifier takes a
+four-byte sequence as one character. With no flag ECMA-262 matches by UTF-16 code unit, so a match can take half of a
+character beyond the Basic Multilingual Plane: in a `str` its text holds that half as a lone surrogate, as in
+JavaScript, and its start and end are the whole character's; over `bytes` the position between the halves is the
+character's third byte.
 
-A match has no limit by default. A program that matches a pattern or a text it did not write gives the pattern a
-match timeout in seconds, as a .NET `Regex` has: a match that runs past it, or whose backtracking memory reaches its
-cap, raises `MatchLimitError`. No pattern can overflow the stack. `set_default_timeout` sets the timeout of every
-pattern compiled after it, and `test` and `search` take a `timeout=` of their own.
+## Differences from re
 
-```python
-import corvus_regex_ecma262 as ecma
+The methods follow `RegExp`, and a `Match` reads as `re`'s does; the meaning follows ECMA-262. The differences a user
+coming from `re` will meet:
 
-slow = ecma.compile(r"^(?:(a+)\1*)+$", timeout=0.1)
-try:
-    slow.test("a" * 60 + "b")
-except ecma.MatchLimitError:
-    pass
-else:
-    raise AssertionError("the match did not stop at its timeout")
-```
-
-## The edition and the version of Unicode
-
-JSON Schema 2020-12 names the grammar of ECMAScript 2020. `edition="es2020"` refuses what later editions added: the
-`d` and `v` flags, modifier groups, a group name used twice, and property names outside the 2020 tables.
-`unicode_version` chooses the tables apart from it: 13, 17, 18, `"latest"` (18), or None for V8's (17). Both are read
-when the pattern is compiled, so a match costs the same whatever they are.
-
-```python
-import corvus_regex_ecma262 as ecma
-
-greek = ecma.compile(r"^\p{Script=Greek}+$", "u", timeout=1.0, edition="es2020", unicode_version=13)
-assert greek.test("αβγ") and greek.unicode_version == 13
-
-# Vithkuqi is in Unicode 14 and later, so not in Unicode 13.
-assert not ecma.is_valid(r"\p{Script=Vithkuqi}", "u", unicode_version=13)
-assert ecma.UNICODE_VERSIONS == (13, 17, 18)
-```
-
-## Differences from Python's re
-
-- The grammar is ECMA-262's: a group is named `(?<name>...)`, not `(?P<name>...)`, and a backreference to it is
-  `\k<name>`. The flags are a string as `RegExp` takes them, and `(?i:...)` groups set them inside a pattern; there
-  is no `(?i)` prefix for the whole pattern, no `\A` or `\Z`, and no conditionals.
-- `\d` is `[0-9]` and `\w` the 63 ASCII word characters, where `re` makes them Unicode in a `str` pattern; `\s` is
-  ECMAScript's white space and line terminators, and `.` excludes LF, CR, U+2028 and U+2029.
-- A replacement template writes a group as `$1` or `$<name>`, not `\1` or `\g<name>`, and `$&`, `` $` `` and `$'` are
-  the match and the text before and after it.
-- `replace` replaces every match only with the `g` flag (or `replace_all`), where `re.sub` replaces every match unless
-  given a count.
-- `re` has no limit on a match's time. Here a pattern without a backreference is matched in time linear in the text,
-  and a pattern from outside should be given a `timeout`, which bounds every match.
-
-## Where next
-
-- [The API reference](api.md), generated from the package's typed stubs.
-- [The README](../README.md), with how positions are read without `u` or `v`.
-- [The benchmark page](https://corvus-oss.org/corvus-regex-ecma262-benchmarks/), with every engine measured nightly.
+- **The grammar.** A group is named `(?<name>...)`, not `(?P<name>...)`, and a backreference to it is `\k<name>`. No
+  `(?i)` inline option (ECMA-262 has `(?i:...)` groups), no `\A` or `\Z`, and no conditionals. The flags are a
+  separate string.
+- **The character classes.** `\d` is `[0-9]` and `\w` the 63 ASCII word characters, where `re` makes them Unicode in a
+  `str` pattern; `\s` is ECMAScript's white space and line terminators, and `.` excludes the four line terminators
+  (LF, CR, U+2028, U+2029).
+- **Replacement.** A template writes a group as `$1` or `$<name>`, not `\1` or `\g<name>`, and `$&`, `` $` `` and `$'`
+  are the match and the text before and after it. `replace` replaces every match only with the `g` flag, and
+  `replace_all` always does, where `re.sub` replaces every match unless given a count.
+- **Split.** `split` is JavaScript's, which puts what the groups captured between the pieces, as `re.split` does, and
+  takes a limit on the number of pieces.
+- **Timeouts.** `re` has no limit on a match's time. Here a pattern without a backreference is matched in time linear
+  in the text, and a timeout bounds the others.
